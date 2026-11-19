@@ -188,9 +188,7 @@ export class HUD {
       this.lastWeaponKey = wepKey;
       this.elWepName.textContent = weapon.name;
       this.elFireMode.textContent = weapon.fireMode;
-      for (let i = 0; i < 3; i++) {
-        document.getElementById(`wslot-${i}`)?.classList.toggle('active', i === slotIndex);
-      }
+      document.getElementById('wslot-0')?.classList.toggle('active', slotIndex === 0);
       this.lastMag = -99;
       this.lastRes = -99;
     }
@@ -198,15 +196,9 @@ export class HUD {
     if (mag !== this.lastMag || reserve !== this.lastRes) {
       this.lastMag = mag;
       this.lastRes = reserve;
-      if (weapon.id === 'knife') {
-        this.elMag.textContent = '∞';
-        this.elRes.textContent = '';
-        this.elMag.classList.remove('low');
-      } else {
-        this.elMag.textContent = String(mag);
-        this.elRes.textContent = String(reserve);
-        this.elMag.classList.toggle('low', mag <= Math.ceil(weapon.magSize * 0.25));
-      }
+      this.elMag.textContent = String(mag);
+      this.elRes.textContent = String(reserve);
+      this.elMag.classList.toggle('low', mag <= Math.ceil(weapon.magSize * 0.25));
     }
 
     if (isReloading !== this.lastReloading) {

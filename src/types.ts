@@ -32,9 +32,9 @@ export interface Waypoint {
 }
 
 export interface WeaponDef {
-  id: 'vandal' | 'ghost' | 'knife';
+  id: 'vandal';
   name: string;
-  fireMode: 'AUTO' | 'SEMI' | 'MELEE';
+  fireMode: 'AUTO';
   damageBody: number;
   damageHead: number;
   damageLeg: number;

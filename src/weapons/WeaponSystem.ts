@@ -4,7 +4,7 @@ import { WeaponDef } from '../types';
 import { SoundEngine } from '../audio/SoundEngine';
 import { TextureLibrary } from '../textures/ProceduralTextures';
 
-export const WEAPONS: Record<'vandal' | 'ghost' | 'knife', WeaponDef> = {
+export const WEAPONS: Record<'vandal', WeaponDef> = {
   vandal: {
     id: 'vandal',
     name: 'M41-TAC RIFLE',
@@ -27,52 +27,6 @@ export const WEAPONS: Record<'vandal' | 'ghost' | 'knife', WeaponDef> = {
     moveSpeedMult: 1.0,
     automatic: true,
     range: 110,
-  },
-  ghost: {
-    id: 'ghost',
-    name: 'GHOST SILENCED',
-    fireMode: 'SEMI',
-    damageBody: 32,
-    damageHead: 105,
-    damageLeg: 26,
-    fireRate: 6.5,
-    magSize: 15,
-    reserveMax: 45,
-    reloadTime: 1.45,
-    baseSpread: 0.0026,
-    moveSpread: 0.028,
-    crouchMult: 0.65,
-    adsMult: 0.65,
-    adsFov: 62,
-    recoilPitch: 0.016,
-    recoilYaw: 0.005,
-    equipTime: 0.25,
-    moveSpeedMult: 1.08,
-    automatic: false,
-    range: 85,
-  },
-  knife: {
-    id: 'knife',
-    name: 'TACTICAL KNIFE',
-    fireMode: 'MELEE',
-    damageBody: 75,
-    damageHead: 150,
-    damageLeg: 65,
-    fireRate: 2.1,
-    magSize: 0,
-    reserveMax: 0,
-    reloadTime: 0,
-    baseSpread: 0,
-    moveSpread: 0,
-    crouchMult: 1,
-    adsMult: 1,
-    adsFov: 74,
-    recoilPitch: 0,
-    recoilYaw: 0,
-    equipTime: 0.2,
-    moveSpeedMult: 1.24,
-    automatic: false,
-    range: 2.7,
   },
 };
 
@@ -130,13 +84,11 @@ export interface ShotResult {
 }
 
 export class WeaponSystem {
-  public slotOrder: Array<'vandal' | 'ghost' | 'knife'> = ['vandal', 'ghost', 'knife'];
+  public slotOrder: Array<'vandal'> = ['vandal'];
   public currentSlot = 0;
 
-  public ammo: Record<'vandal' | 'ghost' | 'knife', { mag: number; reserve: number }> = {
+  public ammo: Record<'vandal', { mag: number; reserve: number }> = {
     vandal: { mag: 25, reserve: 75 },
-    ghost: { mag: 15, reserve: 45 },
-    knife: { mag: 0, reserve: 0 },
   };
 
   public isReloading = false;
@@ -155,7 +107,6 @@ export class WeaponSystem {
   private sprayResetTimer = 0;
   private kickZ = 0;
   private kickRotX = 0;
-  private knifeSlashAnim = 0;
   private swayX = 0;
   private swayY = 0;
   private adsProgress = 0;
@@ -165,13 +116,8 @@ export class WeaponSystem {
   private readonly vandalAdsPos = new THREE.Vector3(0.0, -0.168, -0.34);
   private readonly vandalAdsRot = new THREE.Euler(0.0, 0.0, 0.0);
 
-  private readonly ghostHipPos = new THREE.Vector3(0.24, -0.21, -0.45);
-  private readonly ghostHipRot = new THREE.Euler(0.035, 0.24, -0.025);
-  private readonly ghostAdsPos = new THREE.Vector3(0.0, -0.102, -0.34);
-  private readonly ghostAdsRot = new THREE.Euler(0.0, 0.0, 0.0);
-
   public viewmodelRoot = new THREE.Group();
-  private models: Record<'vandal' | 'ghost' | 'knife', THREE.Group>;
+  private models: Record<'vandal', THREE.Group>;
   private muzzlePoint = new THREE.Object3D();
   private muzzleFlashGroup = new THREE.Group();
   private muzzleLight = new THREE.PointLight(0xffaa44, 0, 12, 1.5);
@@ -226,17 +172,15 @@ export class WeaponSystem {
     shoot: null,
     reload: null,
   };
-  private armsSlotOffsets: Record<'vandal' | 'ghost' | 'knife', { pos: THREE.Vector3; rot: THREE.Euler; scale: number }> = {
+  private armsSlotOffsets: Record<'vandal', { pos: THREE.Vector3; rot: THREE.Euler; scale: number }> = {
     vandal: { pos: new THREE.Vector3(), rot: new THREE.Euler(), scale: 1 },
-    ghost: { pos: new THREE.Vector3(), rot: new THREE.Euler(), scale: 1 },
-    knife: { pos: new THREE.Vector3(), rot: new THREE.Euler(), scale: 1 },
   };
   private upperArmL: THREE.Object3D | null = null;
   private upperArmR: THREE.Object3D | null = null;
   private upperArmLBasePos = new THREE.Vector3();
   private upperArmRBasePos = new THREE.Vector3();
   private armBoneAdjust: Record<
-    'vandal' | 'ghost' | 'knife',
+    'vandal',
     {
       lDelta: THREE.Vector3;
       rDelta: THREE.Vector3;
@@ -244,8 +188,6 @@ export class WeaponSystem {
     }
   > = {
     vandal: { lDelta: new THREE.Vector3(), rDelta: new THREE.Vector3(), lScale: 1 },
-    ghost: { lDelta: new THREE.Vector3(), rDelta: new THREE.Vector3(), lScale: 1 },
-    knife: { lDelta: new THREE.Vector3(), rDelta: new THREE.Vector3(), lScale: 0.0001 },
   };
   private armsLoaded = false;
 
@@ -266,27 +208,24 @@ export class WeaponSystem {
 
     this.models = {
       vandal: this.buildVandalModel(),
-      ghost: this.buildGhostModel(),
-      knife: this.buildKnifeModel(),
     };
 
-    Object.values(this.models).forEach((m) => this.viewmodelRoot.add(m));
+    this.viewmodelRoot.add(this.models.vandal);
     this.buildMuzzleFlash();
     this.selectSlot(0, true);
     this.loadFpsArmsModel();
   }
 
   public get currentWeapon(): WeaponDef {
-    return WEAPONS[this.slotOrder[this.currentSlot]];
+    return WEAPONS.vandal;
   }
 
   public get currentAmmo(): { mag: number; reserve: number } {
-    return this.ammo[this.slotOrder[this.currentSlot]];
+    return this.ammo.vandal;
   }
 
   public resetAll(): void {
     this.ammo.vandal = { mag: WEAPONS.vandal.magSize, reserve: WEAPONS.vandal.reserveMax };
-    this.ammo.ghost = { mag: WEAPONS.ghost.magSize, reserve: WEAPONS.ghost.reserveMax };
     this.isReloading = false;
     this.reloadProgress = 0;
     this.isAds = false;
@@ -299,35 +238,24 @@ export class WeaponSystem {
   }
 
   public selectSlot(index: number, instant = false): void {
-    if (index < 0 || index >= this.slotOrder.length) return;
+    if (index !== 0) return;
     if (index === this.currentSlot && !instant) return;
-    this.currentSlot = index;
+    this.currentSlot = 0;
     this.isReloading = false;
     this.reloadProgress = 0;
     this.isAds = false;
     this.consecutiveShots = 0;
     this.equipTimer = instant ? 0 : this.currentWeapon.equipTime;
 
-    const id = this.slotOrder[this.currentSlot];
-    this.models.vandal.visible = id === 'vandal';
-    this.models.ghost.visible = id === 'ghost';
-    this.models.knife.visible = id === 'knife';
+    this.models.vandal.visible = true;
     this.adsProgress = 0;
 
-    // Parent muzzle FX directly onto active weapon barrel so tracers & flash stay locked in hipfire AND ADS!
-    if (id === 'vandal') {
-      this.models.vandal.add(this.muzzlePoint, this.muzzleFlashGroup, this.muzzleLight);
-      this.muzzlePoint.position.set(0, 0.036, -0.58);
-    } else if (id === 'ghost') {
-      this.models.ghost.add(this.muzzlePoint, this.muzzleFlashGroup, this.muzzleLight);
-      this.muzzlePoint.position.set(0, 0.044, -0.51);
-    } else {
-      this.viewmodelRoot.add(this.muzzlePoint, this.muzzleFlashGroup, this.muzzleLight);
-      this.muzzlePoint.position.set(0.2, -0.2, -0.5);
-    }
+    // Parent muzzle FX directly onto rifle barrel so tracers & flash stay locked in hipfire AND ADS!
+    this.models.vandal.add(this.muzzlePoint, this.muzzleFlashGroup, this.muzzleLight);
+    this.muzzlePoint.position.set(0, 0.036, -0.58);
     this.muzzleFlashGroup.position.copy(this.muzzlePoint.position);
     this.muzzleLight.position.copy(this.muzzlePoint.position);
-    this.attachArmsToSlot(id);
+    this.attachArmsToSlot('vandal');
   }
 
   private loadFpsArmsModel(): void {
@@ -459,8 +387,6 @@ export class WeaponSystem {
 
           leftGripBone.getWorldPosition(rawL);
           rightGripBone.getWorldPosition(rawR);
-          const rawRFinger = new THREE.Vector3();
-          (rightFingerBone ?? rightGripBone).getWorldPosition(rawRFinger);
           const rawSpan = rawL.distanceTo(rawR);
 
           // Helper: converts a desired offset in weapon space into Armature-local bone translation delta
@@ -503,41 +429,6 @@ export class WeaponSystem {
             rDelta: toArmatureLocalDelta(this.upperArmR, new THREE.Vector3(0.016, -0.078, 0.022), rifleScale),
             lScale: 1,
           };
-
-          // 2. GHOST SUPPRESSED PISTOL: Anchor real right gloved hand directly onto the ergonomic pistol grip,
-          //    and pull the left gloved support hand back & under the trigger guard/grip (NOT holding the silencer!)
-          const ghostScale = rifleScale * 0.9;
-          const ghostRFinger = rawRFinger.clone().multiplyScalar(ghostScale);
-          const ghostAnchorR = new THREE.Vector3(0.008, -0.068, 0.062);
-          const ghostOffset = ghostAnchorR.clone().sub(ghostRFinger);
-          this.armsSlotOffsets.ghost = {
-            pos: ghostOffset,
-            rot: new THREE.Euler(0, 0, 0),
-            scale: ghostScale,
-          };
-          const ghostCurrentL = rawL.clone().multiplyScalar(ghostScale).add(ghostOffset);
-          const ghostDesiredL = new THREE.Vector3(-0.016, -0.072, 0.028);
-          this.armBoneAdjust.ghost = {
-            lDelta: toArmatureLocalDelta(this.upperArmL, ghostDesiredL.sub(ghostCurrentL), ghostScale),
-            rDelta: new THREE.Vector3(),
-            lScale: 1,
-          };
-
-          // 3. TACTICAL TANTO KNIFE: Anchor real right gloved hand firmly around the G10 knife handle
-          //    and collapse unused left arm cleanly (one-handed combat grip — zero grabbing the razor blade!)
-          const knifeScale = rifleScale * 0.95;
-          const knifeRFinger = rawRFinger.clone().multiplyScalar(knifeScale);
-          const knifeAnchorR = new THREE.Vector3(0.004, -0.008, 0.056);
-          this.armsSlotOffsets.knife = {
-            pos: knifeAnchorR.clone().sub(knifeRFinger),
-            rot: new THREE.Euler(0, 0, 0),
-            scale: knifeScale,
-          };
-          this.armBoneAdjust.knife = {
-            lDelta: new THREE.Vector3(),
-            rDelta: new THREE.Vector3(),
-            lScale: 0.0001,
-          };
         } else {
           // Generic fallback for any custom drop-in public/models/fps_arms.glb
           this.armsSlotOffsets.vandal = {
@@ -545,20 +436,10 @@ export class WeaponSystem {
             rot: new THREE.Euler(0, 0, 0),
             scale: 0.08,
           };
-          this.armsSlotOffsets.ghost = {
-            pos: new THREE.Vector3(0, -0.14, 0.02),
-            rot: new THREE.Euler(0, 0, 0),
-            scale: 0.07,
-          };
-          this.armsSlotOffsets.knife = {
-            pos: new THREE.Vector3(0, -0.12, 0.04),
-            rot: new THREE.Euler(0, 0, 0),
-            scale: 0.07,
-          };
         }
 
         this.armsLoaded = true;
-        this.attachArmsToSlot(this.slotOrder[this.currentSlot]);
+        this.attachArmsToSlot('vandal');
       },
       undefined,
       (err) => {
@@ -567,7 +448,7 @@ export class WeaponSystem {
     );
   }
 
-  private attachArmsToSlot(id: 'vandal' | 'ghost' | 'knife'): void {
+  private attachArmsToSlot(id: 'vandal'): void {
     if (!this.armsLoaded) return;
     const cfg = this.armsSlotOffsets[id];
     this.models[id].add(this.fpsArmsPivot);
@@ -579,7 +460,7 @@ export class WeaponSystem {
     this.applyArmBonePose(id);
   }
 
-  private applyArmBonePose(id: 'vandal' | 'ghost' | 'knife'): void {
+  private applyArmBonePose(id: 'vandal'): void {
     if (!this.armsLoaded) return;
     const adj = this.armBoneAdjust[id];
     if (this.upperArmL) {
@@ -617,7 +498,7 @@ export class WeaponSystem {
   public startReload(): void {
     const w = this.currentWeapon;
     const a = this.currentAmmo;
-    if (w.id === 'knife' || this.isReloading) return;
+    if (this.isReloading) return;
     if (a.mag >= w.magSize || a.reserve <= 0) return;
 
     this.isReloading = true;
@@ -646,14 +527,12 @@ export class WeaponSystem {
     if (this.equipTimer > 0 || this.fireCooldown > 0 || this.isReloading) return null;
     if (w.automatic ? !isHolding : !justPressed) return null;
 
-    if (w.id !== 'knife') {
-      const a = this.currentAmmo;
-      if (a.mag <= 0) {
-        this.startReload();
-        return null;
-      }
-      a.mag -= 1;
+    const a = this.currentAmmo;
+    if (a.mag <= 0) {
+      this.startReload();
+      return null;
     }
+    a.mag -= 1;
 
     const rateMult = stimActive ? 1.2 : 1.0;
     this.fireCooldown = 1 / (w.fireRate * rateMult);
@@ -665,12 +544,6 @@ export class WeaponSystem {
 
     const muzzleWorld = new THREE.Vector3();
     this.muzzlePoint.getWorldPosition(muzzleWorld);
-
-    if (w.id === 'knife') {
-      this.knifeSlashAnim = 1.0;
-      this.sound.playKnifeSwing();
-      return { fired: true, weapon: w, origin, direction: forward, muzzleWorld };
-    }
 
     let spread = w.baseSpread;
     if (!grounded) {
@@ -707,15 +580,13 @@ export class WeaponSystem {
 
     this.consecutiveShots += 1;
     this.sprayResetTimer = 0.34;
-    this.kickZ = w.id === 'vandal' ? 0.074 : 0.052;
-    this.kickRotX = w.id === 'vandal' ? 0.105 : 0.12;
+    this.kickZ = 0.074;
+    this.kickRotX = 0.105;
 
     this.triggerMuzzleFlash();
     this.spawnBrassShell(muzzleWorld, right, up, forward);
     this.playArmsAnim('shoot');
-
-    if (w.id === 'vandal') this.sound.playVandalShot(1.0);
-    else this.sound.playGhostShot();
+    this.sound.playVandalShot(1.0);
 
     if (this.currentAmmo.mag === 0 && this.currentAmmo.reserve > 0) {
       setTimeout(() => {
@@ -914,10 +785,10 @@ export class WeaponSystem {
     this.muzzleFlashTimer = 0.04;
     this.muzzleFlashGroup.visible = true;
     this.muzzleFlashGroup.rotation.z = Math.random() * Math.PI;
-    const baseScale = this.currentWeapon.id === 'ghost' ? 0.58 : this.isAds ? 0.62 : 0.96;
+    const baseScale = this.isAds ? 0.62 : 0.96;
     const s = baseScale * (0.9 + Math.random() * 0.26);
     this.muzzleFlashGroup.scale.setScalar(s);
-    this.muzzleLight.intensity = (this.currentWeapon.id === 'ghost' ? 4 : 11) + Math.random() * 3;
+    this.muzzleLight.intensity = 11 + Math.random() * 3;
   }
 
   private spawnBrassShell(
@@ -958,7 +829,7 @@ export class WeaponSystem {
     if (this.fireCooldown > 0) this.fireCooldown = Math.max(0, this.fireCooldown - dt);
     if (this.equipTimer > 0) this.equipTimer = Math.max(0, this.equipTimer - dt);
 
-    this.isAds = adsHeld && w.id !== 'knife' && !this.isReloading && this.equipTimer <= 0;
+    this.isAds = adsHeld && !this.isReloading && this.equipTimer <= 0;
 
     const targetFov = this.isAds ? w.adsFov : 74;
     if (Math.abs(this.camera.fov - targetFov) > 0.05) {
@@ -1021,28 +892,18 @@ export class WeaponSystem {
     this.kickRotX = THREE.MathUtils.lerp(this.kickRotX, 0, Math.min(1, dt * 16));
     this.swayX = THREE.MathUtils.lerp(this.swayX, 0, Math.min(1, dt * 10));
     this.swayY = THREE.MathUtils.lerp(this.swayY, 0, Math.min(1, dt * 10));
-    if (this.knifeSlashAnim > 0) this.knifeSlashAnim = Math.max(0, this.knifeSlashAnim - dt * 4.8);
 
     const t = performance.now() * 0.001;
     const adsTarget = this.isAds ? 1 : 0;
     this.adsProgress = THREE.MathUtils.lerp(this.adsProgress, adsTarget, Math.min(1, dt * 14));
 
-    // Smooth hipfire <-> true red-dot ADS interpolation on active firearm
-    if (w.id === 'vandal') {
-      this.models.vandal.position.lerpVectors(this.vandalHipPos, this.vandalAdsPos, this.adsProgress);
-      this.models.vandal.rotation.set(
-        THREE.MathUtils.lerp(this.vandalHipRot.x, this.vandalAdsRot.x, this.adsProgress),
-        THREE.MathUtils.lerp(this.vandalHipRot.y, this.vandalAdsRot.y, this.adsProgress),
-        THREE.MathUtils.lerp(this.vandalHipRot.z, this.vandalAdsRot.z, this.adsProgress)
-      );
-    } else if (w.id === 'ghost') {
-      this.models.ghost.position.lerpVectors(this.ghostHipPos, this.ghostAdsPos, this.adsProgress);
-      this.models.ghost.rotation.set(
-        THREE.MathUtils.lerp(this.ghostHipRot.x, this.ghostAdsRot.x, this.adsProgress),
-        THREE.MathUtils.lerp(this.ghostHipRot.y, this.ghostAdsRot.y, this.adsProgress),
-        THREE.MathUtils.lerp(this.ghostHipRot.z, this.ghostAdsRot.z, this.adsProgress)
-      );
-    }
+    // Smooth hipfire <-> true red-dot ADS interpolation on primary rifle
+    this.models.vandal.position.lerpVectors(this.vandalHipPos, this.vandalAdsPos, this.adsProgress);
+    this.models.vandal.rotation.set(
+      THREE.MathUtils.lerp(this.vandalHipRot.x, this.vandalAdsRot.x, this.adsProgress),
+      THREE.MathUtils.lerp(this.vandalHipRot.y, this.vandalAdsRot.y, this.adsProgress),
+      THREE.MathUtils.lerp(this.vandalHipRot.z, this.vandalAdsRot.z, this.adsProgress)
+    );
 
     const adsDamp = 1 - this.adsProgress * 0.72;
     const bobAmp = (grounded && playerSpeed > 0.6 ? Math.min(1, playerSpeed / 5.5) * 0.01 : 0.0018) * adsDamp;
@@ -1051,17 +912,15 @@ export class WeaponSystem {
 
     const reloadDip = this.isReloading ? Math.sin(this.reloadProgress * Math.PI) * -0.18 : 0;
     const equipDip = this.equipTimer > 0 ? -(this.equipTimer / Math.max(0.1, w.equipTime)) * 0.25 : 0;
-    const slashRot = Math.sin(this.knifeSlashAnim * Math.PI) * -0.9;
-    const slashFwd = Math.sin(this.knifeSlashAnim * Math.PI) * -0.18;
 
     this.viewmodelRoot.position.set(
       this.swayX * adsDamp + bobX,
       this.swayY * adsDamp - bobY + reloadDip + equipDip,
-      this.kickZ * (1 - this.adsProgress * 0.35) + slashFwd
+      this.kickZ * (1 - this.adsProgress * 0.35)
     );
     this.viewmodelRoot.rotation.set(
-      this.kickRotX * (1 - this.adsProgress * 0.45) + reloadDip * 1.4 + slashRot * 0.45,
-      this.swayX * 1.3 * adsDamp + slashRot * 0.65,
+      this.kickRotX * (1 - this.adsProgress * 0.45) + reloadDip * 1.4,
+      this.swayX * 1.3 * adsDamp,
       -this.swayX * 0.9 * adsDamp + (this.isReloading ? -0.35 * Math.sin(this.reloadProgress * Math.PI) : 0)
     );
 
@@ -1548,373 +1407,5 @@ export class WeaponSystem {
     s.lineTo(-hw, -hh + r);
     s.quadraticCurveTo(-hw, -hh, -hw + r, -hh);
     return s;
-  }
-
-  /**
-   * Sculpted Suppressed Tactical Sidearm ("GHOST SILENCED"):
-   * Beveled titanium-gunmetal slide with cocking serrations, bronze barrel chamber,
-   * fluted octagonal suppressor, micro open-window RMR green-dot reflex optic,
-   * two-tone desert-tan/black polymer frame with underbarrel laser module,
-   * hollow trigger guard, and realistic two-handed bare-forearm / leather fingerless glove hold!
-   */
-private buildGhostModel(): THREE.Group {
-    const root = new THREE.Group();
-    root.position.copy(this.ghostHipPos);
-    root.rotation.copy(this.ghostHipRot);
-
-    const slideSteel = new THREE.MeshStandardMaterial({
-      color: 0x262c36,
-      emissive: new THREE.Color(0x090c12),
-      emissiveIntensity: 0.14,
-      roughness: 0.28,
-      metalness: 0.86,
-      envMapIntensity: 1.55,
-    });
-    const tanFrame = new THREE.MeshStandardMaterial({
-      color: 0xd4b274,
-      map: this.textures?.desertTan.map ?? null,
-      roughnessMap: this.textures?.desertTan.roughnessMap ?? null,
-      bumpMap: this.textures?.desertTan.bumpMap ?? null,
-      bumpScale: 0.008,
-      emissive: new THREE.Color(0x332512),
-      emissiveIntensity: 0.18,
-      roughness: 0.46,
-      metalness: 0.2,
-      envMapIntensity: 1.2,
-    });
-    const matteBlack = new THREE.MeshStandardMaterial({
-      color: 0x14181f,
-      emissive: new THREE.Color(0x07090d),
-      emissiveIntensity: 0.12,
-      roughness: 0.54,
-      metalness: 0.36,
-      envMapIntensity: 1.15,
-    });
-    const bronzeBarrel = new THREE.MeshStandardMaterial({
-      color: 0xb98d4a,
-      roughness: 0.22,
-      metalness: 0.92,
-      envMapIntensity: 1.65,
-    });
-    const boreBlack = new THREE.MeshBasicMaterial({ color: 0x050608 });
-    const greenDotMat = new THREE.MeshBasicMaterial({ color: 0x39ff88 });
-    const laserLensMat = new THREE.MeshBasicMaterial({ color: 0x44f4ff });
-
-    // ===== SLEEK BEVELED SLIDE (narrower & longer profile) =====
-    const slideShape = this.makeRoundedRect(0.036, 0.038, 0.007);
-    const slideGeo = new THREE.ExtrudeGeometry(slideShape, {
-      depth: 0.275,
-      bevelEnabled: true,
-      bevelThickness: 0.004,
-      bevelSize: 0.003,
-      bevelSegments: 2,
-    });
-    slideGeo.translate(0, 0, -0.1375);
-    const slide = new THREE.Mesh(slideGeo, slideSteel);
-    slide.position.set(0, 0.046, -0.048);
-    root.add(slide);
-
-    // Rear & front slide cocking serrations
-    for (let i = 0; i < 6; i++) {
-      const sRear = new THREE.Mesh(new THREE.BoxGeometry(0.043, 0.022, 0.0045), matteBlack);
-      sRear.position.set(0, 0.046, 0.072 - i * 0.01);
-      sRear.rotation.x = 0.24;
-      root.add(sRear);
-    }
-    for (let i = 0; i < 4; i++) {
-      const sFront = new THREE.Mesh(new THREE.BoxGeometry(0.043, 0.02, 0.0045), matteBlack);
-      sFront.position.set(0, 0.046, -0.122 - i * 0.01);
-      sFront.rotation.x = 0.24;
-      root.add(sFront);
-    }
-
-    // Bronze match barrel chamber in ejection port
-    const chamber = new THREE.Mesh(new THREE.BoxGeometry(0.031, 0.022, 0.062), bronzeBarrel);
-    chamber.position.set(0.006, 0.056, -0.048);
-    root.add(chamber);
-
-    // ===== MICRO OPEN-WINDOW RMR OPTIC (aligned with ghostAdsPos y = -0.112) =====
-    const rmrBase = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.013, 0.06), matteBlack);
-    rmrBase.position.set(0, 0.076, 0.022);
-    root.add(rmrBase);
-
-    const rmrOuter = this.makeRoundedRect(0.039, 0.032, 0.009);
-    const rmrHole = this.makeRoundedRect(0.03, 0.023, 0.006);
-    rmrOuter.holes.push(rmrHole);
-    const rmrHoodGeo = new THREE.ExtrudeGeometry(rmrOuter, {
-      depth: 0.022,
-      bevelEnabled: true,
-      bevelThickness: 0.002,
-      bevelSize: 0.0018,
-      bevelSegments: 2,
-    });
-    rmrHoodGeo.translate(0, 0, -0.011);
-    const rmrHood = new THREE.Mesh(rmrHoodGeo, matteBlack);
-    rmrHood.position.set(0, 0.1, 0.016);
-    root.add(rmrHood);
-
-    const rmrGlass = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.029, 0.022),
-      new THREE.MeshBasicMaterial({
-        color: 0x56ffc8,
-        transparent: true,
-        opacity: 0.14,
-        depthWrite: false,
-        side: THREE.DoubleSide,
-      })
-    );
-    rmrGlass.position.set(0, 0.1, 0.016);
-    root.add(rmrGlass);
-
-    const rmrDot = new THREE.Mesh(new THREE.CircleGeometry(0.0022, 10), greenDotMat);
-    rmrDot.position.set(0, 0.102, 0.018);
-    root.add(rmrDot);
-
-    // Suppressor-height front tritium sight
-    const frontBlade = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.018, 0.011), matteBlack);
-    frontBlade.position.set(0, 0.076, -0.172);
-    root.add(frontBlade);
-    const frontTritium = new THREE.Mesh(new THREE.BoxGeometry(0.0045, 0.0055, 0.004), greenDotMat);
-    frontTritium.position.set(0, 0.081, -0.166);
-    root.add(frontTritium);
-
-    // ===== SMOOTH CYLINDRICAL TACTICAL SUPPRESSOR =====
-    const threadCollar = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.032, 16), bronzeBarrel);
-    threadCollar.rotation.x = Math.PI / 2;
-    threadCollar.position.set(0, 0.045, -0.202);
-    root.add(threadCollar);
-
-    const suppressorBody = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.285, 20), matteBlack);
-    suppressorBody.rotation.x = Math.PI / 2;
-    suppressorBody.position.set(0, 0.045, -0.356);
-    root.add(suppressorBody);
-
-    for (const sz of [-0.255, -0.34, -0.43]) {
-      const band = new THREE.Mesh(new THREE.CylinderGeometry(0.0212, 0.0212, 0.012, 20), slideSteel);
-      band.rotation.x = Math.PI / 2;
-      band.position.set(0, 0.045, sz);
-      root.add(band);
-    }
-
-    const supCap = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.02, 0.016, 20), slideSteel);
-    supCap.rotation.x = Math.PI / 2;
-    supCap.position.set(0, 0.045, -0.504);
-    root.add(supCap);
-
-    const supBore = new THREE.Mesh(new THREE.CircleGeometry(0.0085, 14), boreBlack);
-    supBore.rotation.y = Math.PI;
-    supBore.position.set(0, 0.045, -0.513);
-    root.add(supBore);
-
-    // ===== LOWER FRAME, BEAVERTAIL, UNDERBARREL MODULE & TRIGGER GUARD =====
-    const lowerFrameShape = this.makeRoundedRect(0.035, 0.024, 0.005);
-    const lowerFrameGeo = new THREE.ExtrudeGeometry(lowerFrameShape, {
-      depth: 0.255,
-      bevelEnabled: true,
-      bevelThickness: 0.0025,
-      bevelSize: 0.0025,
-      bevelSegments: 2,
-    });
-    lowerFrameGeo.translate(0, 0, -0.1275);
-    const lowerFrame = new THREE.Mesh(lowerFrameGeo, tanFrame);
-    lowerFrame.position.set(0, 0.016, -0.042);
-    root.add(lowerFrame);
-
-    // Rear beavertail tang
-    const beavertail = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.016, 0.036), tanFrame);
-    beavertail.position.set(0, 0.02, 0.095);
-    root.add(beavertail);
-
-    // Slide release lever
-    const slideStop = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.009, 0.04), matteBlack);
-    slideStop.position.set(-0.021, 0.026, 0.016);
-    root.add(slideStop);
-
-    // Compact underbarrel laser/light module
-    const lamBody = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.028, 0.088), matteBlack);
-    lamBody.position.set(0, -0.012, -0.12);
-    root.add(lamBody);
-    const lamLightBezel = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.012, 14), slideSteel);
-    lamLightBezel.rotation.x = Math.PI / 2;
-    lamLightBezel.position.set(0, -0.012, -0.168);
-    root.add(lamLightBezel);
-    const lamCyanDot = new THREE.Mesh(new THREE.BoxGeometry(0.005, 0.005, 0.014), laserLensMat);
-    lamCyanDot.position.set(-0.017, -0.011, -0.11);
-    root.add(lamCyanDot);
-
-    // Hollow trigger guard + curved trigger
-    const tgOuter = this.makeRoundedRect(0.062, 0.044, 0.009);
-    const tgHole = this.makeRoundedRect(0.048, 0.03, 0.006);
-    tgOuter.holes.push(tgHole);
-    const tgGeo = new THREE.ExtrudeGeometry(tgOuter, { depth: 0.014, bevelEnabled: false });
-    tgGeo.rotateY(Math.PI / 2);
-    tgGeo.translate(-0.007, 0, 0);
-    const triggerGuard = new THREE.Mesh(tgGeo, tanFrame);
-    triggerGuard.position.set(0, -0.016, -0.028);
-    root.add(triggerGuard);
-
-    const trigger = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.025, 0.009), slideSteel);
-    trigger.position.set(0, -0.013, -0.02);
-    trigger.rotation.x = 0.25;
-    root.add(trigger);
-
-    // ===== PROPERLY ANGLED ERGONOMIC GRIP (negative X rotation tilts bottom backward toward +Z!) =====
-    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.14, 0.056), tanFrame);
-    grip.position.set(0, -0.06, 0.058);
-    grip.rotation.x = -0.24;
-    root.add(grip);
-
-    const gripPanel = new THREE.Mesh(new THREE.BoxGeometry(0.037, 0.1, 0.04), matteBlack);
-    gripPanel.position.set(0, -0.058, 0.058);
-    gripPanel.rotation.x = -0.24;
-    root.add(gripPanel);
-
-    const magBase = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.02, 0.06), slideSteel);
-    magBase.position.set(0, -0.132, 0.075);
-    magBase.rotation.x = -0.24;
-    root.add(magBase);
-
-    return root;
-  }
-
-  /**
-   * Sculpted Special-Forces Tactical Combat Tanto Knife ("TACTICAL KNIFE"):
-   * Curved beveled drop-point/tanto blade with polished razor cutting edge, dark titanium core,
-   * recessed fuller blood-groove, sawback spine serrations, bolted G10 + desert-tan grip scales,
-   * tactical pommel ring, and realistic bare forearm + matte fingerless leather glove combat hold!
-   */
-  private buildKnifeModel(): THREE.Group {
-    const root = new THREE.Group();
-    root.position.set(0.28, -0.205, -0.43);
-    root.rotation.set(0.14, 0.32, 0.24);
-
-    const darkBladeCore = new THREE.MeshStandardMaterial({
-      color: 0x222730,
-      emissive: new THREE.Color(0x090c10),
-      emissiveIntensity: 0.16,
-      roughness: 0.32,
-      metalness: 0.86,
-      envMapIntensity: 1.55,
-    });
-    const razorEdgeSteel = new THREE.MeshStandardMaterial({
-      color: 0xd8e2ee,
-      roughness: 0.14,
-      metalness: 0.96,
-      envMapIntensity: 2.1,
-    });
-    const tanScaleMat = new THREE.MeshStandardMaterial({
-      color: 0xd9b879,
-      map: this.textures?.desertTan.map ?? null,
-      roughnessMap: this.textures?.desertTan.roughnessMap ?? null,
-      emissive: new THREE.Color(0x3a2b14),
-      emissiveIntensity: 0.22,
-      roughness: 0.48,
-      metalness: 0.22,
-      envMapIntensity: 1.25,
-    });
-    const g10Black = new THREE.MeshStandardMaterial({
-      color: 0x181c22,
-      roughness: 0.62,
-      metalness: 0.24,
-    });
-
-    // ===== SCULPTED CURVED TACTICAL TANTO BLADE (ExtrudeGeometry — ZERO flat rectangle!) =====
-    // Blade silhouette drawn in Y-Z profile (X=length forward along -Z after rotateY, Y=blade height)
-    const bladeShape = new THREE.Shape();
-    bladeShape.moveTo(0.0, -0.022); // Ricasso bottom heel
-    bladeShape.lineTo(0.2, -0.024); // Main belly cutting edge
-    bladeShape.lineTo(0.275, -0.008); // Aggressive angled tanto secondary point
-    bladeShape.lineTo(0.325, 0.022); // Razor spear/tanto tip!
-    bladeShape.lineTo(0.24, 0.026); // False top clip swedge
-    bladeShape.lineTo(0.055, 0.024); // Spine
-    bladeShape.quadraticCurveTo(0.025, 0.032, 0.0, 0.024); // Ergonomic thumb ramp
-    bladeShape.closePath();
-
-    const bladeGeo = new THREE.ExtrudeGeometry(bladeShape, {
-      depth: 0.0055,
-      bevelEnabled: true,
-      bevelThickness: 0.0022,
-      bevelSize: 0.0025,
-      bevelSegments: 2,
-    });
-    bladeGeo.translate(0, 0, -0.00275);
-    bladeGeo.rotateY(Math.PI / 2); // +X -> -Z forward!
-    const bladeCore = new THREE.Mesh(bladeGeo, darkBladeCore);
-    bladeCore.position.set(0, 0.014, -0.025);
-    root.add(bladeCore);
-
-    // Gleaming polished metallic razor bevel edge running along the lower cutting edge & tanto tip!
-    const edgeShape = new THREE.Shape();
-    edgeShape.moveTo(0.005, -0.024);
-    edgeShape.lineTo(0.204, -0.027);
-    edgeShape.lineTo(0.28, -0.01);
-    edgeShape.lineTo(0.331, 0.022);
-    edgeShape.lineTo(0.312, 0.018);
-    edgeShape.lineTo(0.268, -0.002);
-    edgeShape.lineTo(0.196, -0.014);
-    edgeShape.lineTo(0.005, -0.014);
-    edgeShape.closePath();
-    const edgeGeo = new THREE.ExtrudeGeometry(edgeShape, {
-      depth: 0.004,
-      bevelEnabled: true,
-      bevelThickness: 0.0012,
-      bevelSize: 0.0012,
-      bevelSegments: 1,
-    });
-    edgeGeo.translate(0, 0, -0.002);
-    edgeGeo.rotateY(Math.PI / 2);
-    const bladeEdge = new THREE.Mesh(edgeGeo, razorEdgeSteel);
-    bladeEdge.position.set(0, 0.014, -0.025);
-    root.add(bladeEdge);
-
-    // Recessed titanium fuller (blood groove) + tactical sawback spine teeth
-    const fuller = new THREE.Mesh(new THREE.BoxGeometry(0.011, 0.008, 0.165), g10Black);
-    fuller.position.set(0, 0.022, -0.14);
-    root.add(fuller);
-
-    for (let i = 0; i < 6; i++) {
-      const tooth = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.008, 0.008), razorEdgeSteel);
-      tooth.position.set(0, 0.04, -0.095 - i * 0.015);
-      tooth.rotation.x = 0.65;
-      root.add(tooth);
-    }
-
-    // ===== SCULPTED CROSSGUARD BOLSTER, DESERT-TAN G10 HANDLE & TACTICAL POMMEL RING =====
-    const guard = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.072, 0.018), darkBladeCore);
-    guard.position.set(0, 0.004, -0.022);
-    root.add(guard);
-
-    const handleShape = this.makeRoundedRect(0.026, 0.044, 0.009);
-    const handleGeo = new THREE.ExtrudeGeometry(handleShape, {
-      depth: 0.145,
-      bevelEnabled: true,
-      bevelThickness: 0.004,
-      bevelSize: 0.003,
-      bevelSegments: 2,
-    });
-    handleGeo.translate(0, 0, -0.0725);
-    const handleCore = new THREE.Mesh(handleGeo, g10Black);
-    handleCore.position.set(0, 0.004, 0.056);
-    root.add(handleCore);
-
-    // Desert-tan G10 contoured side grip inlays + steel torx bolts (matches rifle palette!)
-    const tanInlay = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.026, 0.112), tanScaleMat);
-    tanInlay.position.set(0, 0.004, 0.056);
-    root.add(tanInlay);
-
-    for (const bz of [0.015, 0.095]) {
-      const bolt = new THREE.Mesh(new THREE.CylinderGeometry(0.0045, 0.0045, 0.036, 8), razorEdgeSteel);
-      bolt.rotation.z = Math.PI / 2;
-      bolt.position.set(0, 0.004, bz);
-      root.add(bolt);
-    }
-
-    // Tactical finger-ring / glass-breaker pommel at rear of grip
-    const pommelRing = new THREE.Mesh(new THREE.TorusGeometry(0.022, 0.006, 8, 16), darkBladeCore);
-    pommelRing.rotation.y = Math.PI / 2;
-    pommelRing.position.set(0, -0.002, 0.152);
-    root.add(pommelRing);
-
-    return root;
   }
 }

@@ -361,13 +361,6 @@ class SunfireGame {
       this.weapons.addSway(e.movementX, e.movementY);
     });
 
-    window.addEventListener('wheel', (e) => {
-      if (this.paused || !this.player.alive) return;
-      const dir = e.deltaY > 0 ? 1 : -1;
-      const next = (this.weapons.currentSlot + dir + 3) % 3;
-      this.weapons.selectSlot(next);
-    });
-
     window.addEventListener('keydown', (e) => {
       if (e.code === 'Escape' && this.matchStarted) {
         if (!this.paused) this.pauseGame();
@@ -379,10 +372,7 @@ class SunfireGame {
 
       if (!this.player.alive) return;
 
-      if (e.code === 'Digit1') this.weapons.selectSlot(0);
-      else if (e.code === 'Digit2') this.weapons.selectSlot(1);
-      else if (e.code === 'Digit3') this.weapons.selectSlot(2);
-      else if (e.code === 'KeyR') this.weapons.startReload();
+      if (e.code === 'KeyR') this.weapons.startReload();
       else if (e.code === 'KeyQ') {
         const origin = this.player.getEyePosition();
         const dir = new THREE.Vector3();
@@ -569,10 +559,7 @@ class SunfireGame {
       }
     }
 
-    if (shot.weapon.id !== 'knife') {
-      const tracerColor = shot.weapon.id === 'vandal' ? 0xff6b24 : 0x42f0ff;
-      this.weapons.spawnTracer(shot.muzzleWorld, endPoint, tracerColor, shot.weapon.id === 'vandal' ? 0.017 : 0.011);
-    }
+    this.weapons.spawnTracer(shot.muzzleWorld, endPoint, 0xff6b24, 0.017);
   }
 
   private onEnemyKilledByPlayer(enemy: TacticalAgent, weaponName: string, headshot: boolean): void {
