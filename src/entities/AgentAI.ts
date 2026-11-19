@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { AABB, Difficulty, SmokeCloud, Team, Waypoint } from '../types';
+import { TextureLibrary } from '../textures/ProceduralTextures';
 import { AgentRig, AgentVisualStyle, buildAgentRig } from './AgentModel';
 
 export interface AgentFireEvent {
@@ -58,13 +59,14 @@ export class TacticalAgent {
     style: AgentVisualStyle,
     spawnPos: THREE.Vector3,
     spawnYaw: number,
-    scene: THREE.Scene
+    scene: THREE.Scene,
+    textures?: TextureLibrary
   ) {
     this.id = id;
     this.name = name;
     this.team = team;
     this.style = style;
-    this.rig = buildAgentRig(id, team, style);
+    this.rig = buildAgentRig(id, team, style, textures);
     scene.add(this.rig.root);
 
     this.respawn(spawnPos, spawnYaw);
@@ -160,10 +162,10 @@ export class TacticalAgent {
     roundActive: boolean,
     onFire: (ev: AgentFireEvent) => void
   ): void {
-    // Hit damage flash tint decay (returns cleanly to subtle 0.16 low-light visibility lift)
+    // Hit damage flash tint decay (returns cleanly to subtle 0.09 low-light PBR visibility lift)
     if (this.hitFlashTimer > 0) {
       this.hitFlashTimer = Math.max(0, this.hitFlashTimer - dt);
-      const boost = this.hitFlashTimer > 0 ? 0.72 : 0.16;
+      const boost = this.hitFlashTimer > 0 ? 0.68 : 0.09;
       for (const m of this.rig.flashMaterials) {
         m.emissiveIntensity = boost;
       }

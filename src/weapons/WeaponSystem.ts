@@ -231,12 +231,16 @@ export class WeaponSystem {
     this.camera.add(this.viewmodelRoot);
     this.scene.add(this.fxGroup);
 
-    // Warm realistic bare skin tone with subtle ambient bounce so arms read cleanly in dark foundry lighting
+    // Warm realistic bare skin tone with subtle PBR shading so arms read cleanly in dark foundry lighting
     this.matSkin = new THREE.MeshStandardMaterial({
-      color: 0xdca586,
+      color: 0xe4b294,
+      map: textures?.operatorSkin.map ?? null,
+      roughnessMap: textures?.operatorSkin.roughnessMap ?? null,
+      bumpMap: textures?.operatorSkin.bumpMap ?? null,
+      bumpScale: 0.005,
       emissive: new THREE.Color(0x3b2116),
       emissiveIntensity: 0.22,
-      roughness: 0.66,
+      roughness: 0.68,
       metalness: 0.02,
       envMapIntensity: 0.85,
     });

@@ -247,9 +247,9 @@ export class LevelBuilder {
       side: THREE.BackSide,
       depthWrite: false,
       uniforms: {
-        topColor: { value: new THREE.Color('#05080f') },
-        midColor: { value: new THREE.Color('#101925') },
-        horizonColor: { value: new THREE.Color('#271923') },
+        topColor: { value: new THREE.Color('#070d18') },
+        midColor: { value: new THREE.Color('#14243b') },
+        horizonColor: { value: new THREE.Color('#381b2d') },
       },
       vertexShader: `
         varying vec3 vWorldPos;
@@ -274,12 +274,12 @@ export class LevelBuilder {
     });
     scene.add(new THREE.Mesh(skyGeo, skyMat));
 
-    scene.fog = new THREE.FogExp2(0x0c1118, 0.023);
+    scene.fog = new THREE.FogExp2(0x0c1320, 0.0185);
 
-    const hemi = new THREE.HemisphereLight(0x4b7499, 0x261a22, 0.92);
+    const hemi = new THREE.HemisphereLight(0x3f72a8, 0x361826, 0.72);
     scene.add(hemi);
 
-    const keyLight = new THREE.DirectionalLight(0x9bd2ff, 1.45);
+    const keyLight = new THREE.DirectionalLight(0x9cd8ff, 1.55);
     keyLight.position.set(-14, 24, -12);
     keyLight.castShadow = true;
     keyLight.shadow.mapSize.set(1024, 1024);
@@ -293,21 +293,30 @@ export class LevelBuilder {
     keyLight.shadow.normalBias = 0.03;
     scene.add(keyLight);
 
-    // Consolidated 3-color dramatic industrial point lights (keeps PBR shader blazing fast for 60 FPS!)
-    const crimsonWest = new THREE.PointLight(0xff245f, 26, 24, 1.35);
-    crimsonWest.position.set(-6.8, 4.4, 5.2);
+    // Warm furnace directional rim light (virtually zero GPU cost, adds vibrant orange edge highlights!)
+    const rimWarm = new THREE.DirectionalLight(0xff7830, 0.62);
+    rimWarm.position.set(16, 7, 12);
+    scene.add(rimWarm);
+
+    // Rich high-contrast cyan, crimson & warm industrial accent lights
+    const crimsonWest = new THREE.PointLight(0xff1e5c, 34, 24, 1.32);
+    crimsonWest.position.set(-6.8, 4.4, 5.0);
     this.group.add(crimsonWest);
 
-    const cyanArchBack = new THREE.PointLight(0x28e8ff, 34, 28, 1.3);
-    cyanArchBack.position.set(0, 4.8, -11.5);
+    const crimsonEntry = new THREE.PointLight(0xe61c68, 22, 18, 1.4);
+    crimsonEntry.position.set(5.4, 3.8, 9.8);
+    this.group.add(crimsonEntry);
+
+    const cyanArchBack = new THREE.PointLight(0x1ceeff, 46, 28, 1.25);
+    cyanArchBack.position.set(0, 4.8, -11.8);
     this.group.add(cyanArchBack);
 
-    const cyanYard = new THREE.PointLight(0x42d6ff, 18, 22, 1.4);
-    cyanYard.position.set(4.5, 5.6, 0.5);
+    const cyanYard = new THREE.PointLight(0x38dcff, 24, 22, 1.35);
+    cyanYard.position.set(3.8, 5.6, 0.2);
     this.group.add(cyanYard);
     this.flickerLights.push({
       light: cyanYard,
-      baseIntensity: 18,
+      baseIntensity: 24,
       speed: 1,
       phase: 2.2,
       mode: 'fluorescent',
@@ -374,15 +383,15 @@ export class LevelBuilder {
   }
 
   private buildWetFloorsAndDebris(): void {
-    // Optimized single-lobe wet PBR floor (reflects PMREM environment vividly in puddles at half shader cost!)
+    // Vivid wet reflective puddle asphalt floor (bright cyan/amber/crimson mirror reflections in puddles!)
     const wetFloorMat = new THREE.MeshStandardMaterial({
       map: this.tex.wetAsphalt.map,
       roughnessMap: this.tex.wetAsphalt.roughnessMap,
       bumpMap: this.tex.wetAsphalt.bumpMap,
-      bumpScale: 0.036,
-      roughness: 0.78,
-      metalness: 0.34,
-      envMapIntensity: 2.4,
+      bumpScale: 0.038,
+      roughness: 0.72,
+      metalness: 0.38,
+      envMapIntensity: 2.95,
     });
 
     const floorMesh = new THREE.Mesh(new THREE.PlaneGeometry(34, 36), wetFloorMat);
@@ -738,8 +747,8 @@ export class LevelBuilder {
     this.addBox(-7.4, 0.55, -4.65, 1.3, 1.1, 1.2, this.matCrate, { minimap: 'crate' });
     this.addBox(-6.2, 0.42, -4.85, 0.95, 0.84, 0.95, this.matCrate, { minimap: 'crate' });
 
-    this.addBurningFireBarrel(-5.25, -4.75, 28, 0.4, true);
-    this.addBurningFireBarrel(6.9, 5.5, 0, 2.7, false);
+    this.addBurningFireBarrel(-5.25, -4.75, 34, 0.4, true);
+    this.addBurningFireBarrel(6.9, 5.5, 28, 2.7, true);
     this.addBurningFireBarrel(-11.2, -13.6, 0, 4.1, false);
   }
 
@@ -820,28 +829,46 @@ export class LevelBuilder {
     this.addBox(0, 3.6, -18.08, 18.0, 5.4, 0.14, this.matCorrugated, { collide: false, raycast: false });
 
     const ventBackdrop = new THREE.Mesh(
-      new THREE.CircleGeometry(2.35, 24),
-      new THREE.MeshBasicMaterial({ color: 0x38efff })
+      new THREE.CircleGeometry(2.35, 28),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(0.55, 2.35, 2.85) })
     );
     ventBackdrop.position.set(0, 3.3, -17.98);
     this.group.add(ventBackdrop);
 
-    const ventRing = new THREE.Mesh(new THREE.TorusGeometry(2.4, 0.22, 10, 28), this.matSteel);
-    ventRing.position.set(0, 3.3, -17.92);
+    // Luminous additive cyan glow halo radiating around the turbine exhaust
+    const ventHalo = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: this.tex.flashSprite,
+        color: 0x32eeff,
+        transparent: true,
+        opacity: 0.42,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      })
+    );
+    ventHalo.position.set(0, 3.3, -17.55);
+    ventHalo.scale.set(7.4, 7.4, 1);
+    this.group.add(ventHalo);
+
+    const ventRing = new THREE.Mesh(new THREE.TorusGeometry(2.4, 0.22, 10, 32), this.matSteel);
+    ventRing.position.set(0, 3.3, -17.84);
     this.group.add(ventRing);
 
     const fanHub = new THREE.Group();
-    fanHub.position.set(0, 3.3, -17.85);
-    const hubCap = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.26, 12), this.matPipeDark);
+    fanHub.position.set(0, 3.3, -17.64);
+    const hubCap = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.28, 14), this.matPipeDark);
     hubCap.rotation.x = Math.PI / 2;
     fanHub.add(hubCap);
+    // Each blade sits in its own radial pivot so aerodynamic pitch twists along its radial axis — ZERO backdrop clipping!
     for (let i = 0; i < 6; i++) {
-      const blade = new THREE.Mesh(new THREE.BoxGeometry(0.46, 2.15, 0.08), this.matPipeDark);
+      const bladePivot = new THREE.Group();
       const ang = (i / 6) * Math.PI * 2;
-      blade.position.set(Math.cos(ang) * 1.15, Math.sin(ang) * 1.15, 0);
-      blade.rotation.z = ang - Math.PI / 2;
-      blade.rotation.y = 0.25;
-      fanHub.add(blade);
+      bladePivot.rotation.z = ang;
+      const blade = new THREE.Mesh(new THREE.BoxGeometry(0.46, 2.05, 0.08), this.matPipeDark);
+      blade.position.set(0, 1.15, 0);
+      blade.rotation.y = 0.24;
+      bladePivot.add(blade);
+      fanHub.add(bladePivot);
     }
     this.group.add(fanHub);
     this.fanBlades.push(fanHub);
@@ -943,26 +970,35 @@ export class LevelBuilder {
 
   private buildEmbersAndVolumetricBeams(): THREE.Points {
     const cyanBeamMat = new THREE.MeshBasicMaterial({
-      color: 0x36ddff,
+      color: 0x36eeff,
       transparent: true,
-      opacity: 0.048,
+      opacity: 0.082,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       side: THREE.DoubleSide,
     });
     const crimsonBeamMat = new THREE.MeshBasicMaterial({
-      color: 0xff2b5e,
+      color: 0xff2666,
       transparent: true,
-      opacity: 0.042,
+      opacity: 0.068,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    const amberBeamMat = new THREE.MeshBasicMaterial({
+      color: 0xff8c2b,
+      transparent: true,
+      opacity: 0.06,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       side: THREE.DoubleSide,
     });
 
     const beamSpecs = [
-      { x: 0.0, y: 3.3, z: -10.4, w: 3.8, h: 7.4, mat: cyanBeamMat, rotZ: -0.22 },
-      { x: 2.2, y: 3.4, z: -1.4, w: 2.8, h: 7.2, mat: cyanBeamMat, rotZ: -0.28 },
-      { x: -5.4, y: 3.2, z: 3.2, w: 3.0, h: 7.0, mat: crimsonBeamMat, rotZ: 0.32 },
+      { x: 0.0, y: 3.3, z: -10.4, w: 4.2, h: 7.4, mat: cyanBeamMat, rotZ: -0.22 },
+      { x: 2.2, y: 3.4, z: -1.4, w: 3.0, h: 7.2, mat: cyanBeamMat, rotZ: -0.28 },
+      { x: -5.4, y: 3.2, z: 3.2, w: 3.2, h: 7.0, mat: crimsonBeamMat, rotZ: 0.32 },
+      { x: -5.1, y: 2.8, z: -4.4, w: 2.8, h: 6.2, mat: amberBeamMat, rotZ: 0.18 },
     ];
     for (const b of beamSpecs) {
       const plane = new THREE.Mesh(new THREE.PlaneGeometry(b.w, b.h), b.mat);
@@ -971,7 +1007,7 @@ export class LevelBuilder {
       this.group.add(plane);
     }
 
-    const count = 120;
+    const count = 260;
     const positions = new Float32Array(count * 3);
     for (let i = 0; i < count; i++) {
       positions[i * 3] = (Math.random() - 0.5) * 26;
@@ -982,10 +1018,10 @@ export class LevelBuilder {
     geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     const mat = new THREE.PointsMaterial({
       map: this.tex.emberSprite,
-      color: 0xff9238,
-      size: 0.16,
+      color: 0xff9a3a,
+      size: 0.18,
       transparent: true,
-      opacity: 0.88,
+      opacity: 0.94,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });

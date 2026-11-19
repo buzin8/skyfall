@@ -6,7 +6,7 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { Difficulty, GameMode, GameSettings } from './types';
 import { SoundEngine } from './audio/SoundEngine';
-import { createTextureLibrary } from './textures/ProceduralTextures';
+import { createTextureLibrary, TextureLibrary } from './textures/ProceduralTextures';
 import { BuiltLevel, LevelBuilder } from './world/LevelBuilder';
 import { PlayerController } from './player/PlayerController';
 import { WeaponSystem } from './weapons/WeaponSystem';
@@ -36,29 +36,29 @@ function buildIndustrialEnvironment(renderer: THREE.WebGLRenderer): THREE.Textur
   );
   envScene.add(shell);
 
-  // Overhead cool cyan fluorescent strips
-  const cyanStripMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.6, 2.8, 3.4) });
+  // Overhead vivid electric-cyan fluorescent strips
+  const cyanStripMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.75, 3.4, 4.1) });
   for (const x of [-4.5, 0, 4.5]) {
-    const strip = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 14), cyanStripMat);
+    const strip = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 15), cyanStripMat);
     strip.rotation.x = Math.PI / 2;
     strip.position.set(x, 6.6, 0);
     envScene.add(strip);
   }
 
-  // Warm orange/amber fire bounce patches near lower walls
-  const amberMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(3.2, 1.35, 0.35) });
-  const fireWall1 = new THREE.Mesh(new THREE.PlaneGeometry(6.5, 4.2), amberMat);
+  // Warm molten orange/amber fire bounce patches near lower walls
+  const amberMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(3.9, 1.6, 0.35) });
+  const fireWall1 = new THREE.Mesh(new THREE.PlaneGeometry(7.2, 4.6), amberMat);
   fireWall1.position.set(-7.5, 1.8, -11.5);
   envScene.add(fireWall1);
 
-  const fireWall2 = new THREE.Mesh(new THREE.PlaneGeometry(5.5, 3.6), amberMat);
+  const fireWall2 = new THREE.Mesh(new THREE.PlaneGeometry(6.0, 4.0), amberMat);
   fireWall2.rotation.y = -Math.PI / 2;
   fireWall2.position.set(11.5, 1.8, 4.5);
   envScene.add(fireWall2);
 
-  // Crimson / magenta side rim glow
-  const crimsonMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(2.9, 0.32, 0.82) });
-  const sideGlow = new THREE.Mesh(new THREE.PlaneGeometry(9.0, 4.0), crimsonMat);
+  // Vibrant crimson / neon magenta side rim glow
+  const crimsonMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(3.6, 0.35, 1.0) });
+  const sideGlow = new THREE.Mesh(new THREE.PlaneGeometry(9.6, 4.4), crimsonMat);
   sideGlow.rotation.y = Math.PI / 2;
   sideGlow.position.set(-11.5, 3.5, 2.5);
   envScene.add(sideGlow);
@@ -77,6 +77,7 @@ class SunfireGame {
   private camera: THREE.PerspectiveCamera;
 
   private sound = new SoundEngine();
+  private textures: TextureLibrary;
   private level: BuiltLevel;
   private player: PlayerController;
   private weapons: WeaponSystem;
@@ -121,7 +122,7 @@ class SunfireGame {
   private fpsAccum = 0;
   private fpsFrames = 0;
   private spottingTimer = 0;
-  private bloomEnabled = false; // Default direct fast renderer for rock-solid 60 FPS!
+  private bloomEnabled = true; // Half-res selective HDR bloom on by default for vibrant glowing atmosphere at 60 FPS!
   private readonly targetFrameMs = 1000 / 60 - 1.5; // Smooth 60 FPS cap without skipping 60Hz vblanks!
 
   private menuOverlay = document.getElementById('menu-overlay')!;
@@ -138,7 +139,7 @@ class SunfireGame {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.2;
+    this.renderer.toneMappingExposure = 1.24;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.container.appendChild(this.renderer.domElement);
 
@@ -152,13 +153,13 @@ class SunfireGame {
     this.setupPostProcessing();
 
     // 4. Build Dark Gritty Industrial Foundry Arena
-    const textures = createTextureLibrary();
-    const builder = new LevelBuilder(textures);
+    this.textures = createTextureLibrary();
+    const builder = new LevelBuilder(this.textures);
     this.level = builder.build(this.scene);
 
     // 5. Core gameplay subsystems
     this.player = new PlayerController(this.sound);
-    this.weapons = new WeaponSystem(this.scene, this.camera, this.sound, textures);
+    this.weapons = new WeaponSystem(this.scene, this.camera, this.sound, this.textures);
     this.abilities = new AbilitySystem(this.scene, this.sound);
 
     const mmCanvas = document.getElementById('minimap-canvas') as HTMLCanvasElement;
@@ -197,9 +198,9 @@ class SunfireGame {
 
       const bloomPass = new UnrealBloomPass(
         new THREE.Vector2(Math.floor(w * 0.5), Math.floor(h * 0.5)),
-        0.34,
-        0.4,
-        0.88
+        0.42, // vibrant glowing neon, turbine, fires & embers without washing out targets
+        0.48,
+        0.8
       );
       composer.addPass(bloomPass);
 
@@ -453,7 +454,8 @@ class SunfireGame {
           sp.role,
           sp.pos,
           sp.yaw,
-          this.scene
+          this.scene,
+          this.textures
         );
         ally.respawn(sp.pos, sp.yaw, showcaseOnly ? 99 : idx === 0 ? 3.2 : 1.6);
         this.agents.push(ally);
@@ -468,7 +470,8 @@ class SunfireGame {
         sp.role,
         sp.pos,
         sp.yaw,
-        this.scene
+        this.scene,
+        this.textures
       );
       const hold = idx === 0 ? (showcaseOnly ? 99 : 2.6) : 0.4 + idx * 0.3;
       enemy.respawn(sp.pos, sp.yaw, hold);

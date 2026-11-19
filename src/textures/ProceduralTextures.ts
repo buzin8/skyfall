@@ -22,6 +22,12 @@ export interface TextureLibrary {
   rifleStencil: THREE.CanvasTexture;
   goldSleeve: PBRTextureSet;
   desertTan: PBRTextureSet;
+  tacticalFabricAlly: PBRTextureSet;
+  tacticalFabricEnemy: PBRTextureSet;
+  tacticalDenim: PBRTextureSet;
+  tacticalVest: PBRTextureSet;
+  helmetShell: PBRTextureSet;
+  operatorSkin: PBRTextureSet;
 }
 
 function makeCanvas(w: number, h: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
@@ -833,6 +839,265 @@ function buildDesertTanPBR(): PBRTextureSet {
   };
 }
 
+/**
+ * Tactical Ripstop BDU Cloth PBR texture (navy spec-ops or dark urban insurgent cloth)
+ * with realistic crosshatch weave, diagonal fabric creases, grime, and stitched seam lines.
+ */
+function buildRipstopFabricPBR(
+  baseHex: string,
+  darkHex: string,
+  accentHex: string,
+  seed: number,
+  addCamo = false
+): PBRTextureSet {
+  const size = 256;
+  const [cCol, col] = makeCanvas(size, size);
+  const [cRough, rough] = makeCanvas(size, size);
+  const [cBump, bump] = makeCanvas(size, size);
+  const rand = mulberry32(seed);
+
+  col.fillStyle = baseHex;
+  col.fillRect(0, 0, size, size);
+  rough.fillStyle = '#d4d4d4';
+  rough.fillRect(0, 0, size, size);
+  bump.fillStyle = '#808080';
+  bump.fillRect(0, 0, size, size);
+
+  // Subtle dark tactical camo / tonal fabric mottling
+  for (let i = 0; i < (addCamo ? 46 : 30); i++) {
+    const x = rand() * size;
+    const y = rand() * size;
+    const rx = 14 + rand() * 38;
+    const ry = 10 + rand() * 26;
+    const rot = rand() * Math.PI;
+    col.fillStyle = i % 3 === 0 ? accentHex : darkHex;
+    col.globalAlpha = addCamo ? 0.22 + rand() * 0.16 : 0.12 + rand() * 0.1;
+    col.beginPath();
+    col.ellipse(x, y, rx, ry, rot, 0, Math.PI * 2);
+    col.fill();
+  }
+  col.globalAlpha = 1;
+
+  // Cloth folds & tension wrinkles (adds huge sculptural depth to arms/legs/torso!)
+  for (let i = 0; i < 18; i++) {
+    const y = (i / 18) * size;
+    const h = 10 + rand() * 18;
+    const ang = (rand() - 0.5) * 0.35;
+
+    const fg = col.createLinearGradient(0, 0, 0, h);
+    fg.addColorStop(0, 'rgba(6, 10, 16, 0.34)');
+    fg.addColorStop(0.45, 'rgba(220, 232, 248, 0.14)');
+    fg.addColorStop(1, 'rgba(6, 10, 16, 0.26)');
+    col.save();
+    col.translate(0, y);
+    col.rotate(ang);
+    col.fillStyle = fg;
+    col.fillRect(-40, 0, size + 80, h);
+    col.restore();
+
+    const bg = bump.createLinearGradient(0, 0, 0, h);
+    bg.addColorStop(0, '#464646');
+    bg.addColorStop(0.45, '#c2c2c2');
+    bg.addColorStop(1, '#525252');
+    bump.save();
+    bump.translate(0, y);
+    bump.rotate(ang);
+    bump.fillStyle = bg;
+    bump.fillRect(-40, 0, size + 80, h);
+    bump.restore();
+  }
+
+  // Fine military ripstop crosshatch grid weave
+  col.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+  col.lineWidth = 1;
+  bump.strokeStyle = 'rgba(176, 176, 176, 0.22)';
+  bump.lineWidth = 1;
+  for (let p = 0; p < size; p += 8) {
+    col.beginPath();
+    col.moveTo(p, 0);
+    col.lineTo(p, size);
+    col.moveTo(0, p);
+    col.lineTo(size, p);
+    col.stroke();
+
+    bump.beginPath();
+    bump.moveTo(p, 0);
+    bump.lineTo(p, size);
+    bump.moveTo(0, p);
+    bump.lineTo(size, p);
+    bump.stroke();
+  }
+
+  // Double-stitched tactical seam accent
+  col.strokeStyle = 'rgba(12, 16, 22, 0.45)';
+  col.setLineDash([4, 3]);
+  col.lineWidth = 1.5;
+  col.beginPath();
+  col.moveTo(size * 0.5, 0);
+  col.lineTo(size * 0.5, size);
+  col.stroke();
+  col.setLineDash([]);
+
+  return {
+    map: toTexture(cCol, 2, 2, true),
+    roughnessMap: toTexture(cRough, 2, 2, false),
+    bumpMap: toTexture(cBump, 2, 2, false),
+  };
+}
+
+/**
+ * Cordura Nylon MOLLE Plate Carrier PBR texture (PALS webbing straps, bartack stitches, cordura weave)
+ */
+function buildTacticalVestPBR(): PBRTextureSet {
+  const size = 256;
+  const [cCol, col] = makeCanvas(size, size);
+  const [cRough, rough] = makeCanvas(size, size);
+  const [cBump, bump] = makeCanvas(size, size);
+  const rand = mulberry32(8842);
+
+  col.fillStyle = '#30343a';
+  col.fillRect(0, 0, size, size);
+  rough.fillStyle = '#c4c4c4';
+  rough.fillRect(0, 0, size, size);
+  bump.fillStyle = '#707070';
+  bump.fillRect(0, 0, size, size);
+
+  // Coarse Cordura nylon grain
+  for (let i = 0; i < 650; i++) {
+    const x = rand() * size;
+    const y = rand() * size;
+    const v = rand() > 0.5 ? 255 : 0;
+    col.fillStyle = `rgba(${v},${v},${v},0.05)`;
+    col.fillRect(x, y, 2, 2);
+  }
+
+  // Horizontal MOLLE / PALS webbing rows + vertical bartack stitches
+  for (let y = 14; y < size; y += 36) {
+    col.fillStyle = 'rgba(10, 12, 16, 0.65)';
+    col.fillRect(0, y - 2, size, 22);
+    col.fillStyle = 'rgba(84, 90, 98, 0.42)';
+    col.fillRect(0, y, size, 17);
+    col.fillStyle = 'rgba(210, 218, 228, 0.14)';
+    col.fillRect(0, y, size, 2);
+
+    bump.fillStyle = '#282828';
+    bump.fillRect(0, y - 3, size, 24);
+    bump.fillStyle = '#d8d8d8';
+    bump.fillRect(0, y, size, 17);
+
+    rough.fillStyle = '#9e9e9e';
+    rough.fillRect(0, y, size, 17);
+
+    for (let x = 22; x < size; x += 44) {
+      col.fillStyle = 'rgba(12, 14, 18, 0.72)';
+      col.fillRect(x, y, 4, 17);
+      bump.fillStyle = '#3c3c3c';
+      bump.fillRect(x, y, 4, 17);
+    }
+  }
+
+  return {
+    map: toTexture(cCol, 2, 2, true),
+    roughnessMap: toTexture(cRough, 2, 2, false),
+    bumpMap: toTexture(cBump, 2, 2, false),
+  };
+}
+
+/**
+ * Matte Stippled Kevlar Ballistic Helmet PBR texture with tactical scuffing
+ */
+function buildHelmetShellPBR(): PBRTextureSet {
+  const size = 256;
+  const [cCol, col] = makeCanvas(size, size);
+  const [cRough, rough] = makeCanvas(size, size);
+  const [cBump, bump] = makeCanvas(size, size);
+  const rand = mulberry32(9104);
+
+  col.fillStyle = '#9aa0a6';
+  col.fillRect(0, 0, size, size);
+  rough.fillStyle = '#a2a2a2';
+  rough.fillRect(0, 0, size, size);
+  bump.fillStyle = '#808080';
+  bump.fillRect(0, 0, size, size);
+
+  // Matte kevlar stipple grain
+  for (let i = 0; i < 900; i++) {
+    const x = rand() * size;
+    const y = rand() * size;
+    const shade = rand() > 0.5;
+    col.fillStyle = shade ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.08)';
+    col.fillRect(x, y, 2, 2);
+    bump.fillStyle = shade ? 'rgba(170,170,170,0.35)' : 'rgba(90,90,90,0.35)';
+    bump.fillRect(x, y, 2, 2);
+  }
+
+  // Subtle combat edge scratches
+  for (let i = 0; i < 28; i++) {
+    const x = rand() * size;
+    const y = rand() * size;
+    const len = 8 + rand() * 26;
+    const ang = rand() * Math.PI;
+    col.strokeStyle = rand() > 0.5 ? 'rgba(225,232,240,0.18)' : 'rgba(20,24,28,0.24)';
+    col.lineWidth = 1;
+    col.beginPath();
+    col.moveTo(x, y);
+    col.lineTo(x + Math.cos(ang) * len, y + Math.sin(ang) * len);
+    col.stroke();
+  }
+
+  return {
+    map: toTexture(cCol, 2, 2, true),
+    roughnessMap: toTexture(cRough, 2, 2, false),
+    bumpMap: toTexture(cBump, 2, 2, false),
+  };
+}
+
+/**
+ * Natural shaded operator skin PBR texture (warm undertones, subtle forearm tone & soft pores)
+ */
+function buildOperatorSkinPBR(): PBRTextureSet {
+  const size = 256;
+  const [cCol, col] = makeCanvas(size, size);
+  const [cRough, rough] = makeCanvas(size, size);
+  const [cBump, bump] = makeCanvas(size, size);
+  const rand = mulberry32(6619);
+
+  const grad = col.createLinearGradient(0, 0, size, size);
+  grad.addColorStop(0, '#dba484');
+  grad.addColorStop(0.5, '#e2ad8e');
+  grad.addColorStop(1, '#c98e6e');
+  col.fillStyle = grad;
+  col.fillRect(0, 0, size, size);
+
+  rough.fillStyle = '#aeaeae';
+  rough.fillRect(0, 0, size, size);
+  bump.fillStyle = '#808080';
+  bump.fillRect(0, 0, size, size);
+
+  for (let i = 0; i < 42; i++) {
+    const x = rand() * size;
+    const y = rand() * size;
+    const r = 12 + rand() * 34;
+    col.fillStyle = i % 2 === 0 ? 'rgba(182, 108, 82, 0.07)' : 'rgba(255, 224, 202, 0.07)';
+    col.beginPath();
+    col.arc(x, y, r, 0, Math.PI * 2);
+    col.fill();
+  }
+
+  for (let i = 0; i < 420; i++) {
+    const x = rand() * size;
+    const y = rand() * size;
+    bump.fillStyle = rand() > 0.5 ? 'rgba(142,142,142,0.18)' : 'rgba(116,116,116,0.18)';
+    bump.fillRect(x, y, 2, 2);
+  }
+
+  return {
+    map: toTexture(cCol, 1, 1, true),
+    roughnessMap: toTexture(cRough, 1, 1, false),
+    bumpMap: toTexture(cBump, 1, 1, false),
+  };
+}
+
 function buildRadialSprite(inner: string, mid: string, outer: string, size = 128): THREE.CanvasTexture {
   const [c, ctx] = makeCanvas(size, size);
   const half = size / 2;
@@ -878,5 +1143,11 @@ export function createTextureLibrary(): TextureLibrary {
     rifleStencil: buildRifleStencilTexture(),
     goldSleeve: buildGoldSleevePBR(),
     desertTan: buildDesertTanPBR(),
+    tacticalFabricAlly: buildRipstopFabricPBR('#2f5b8f', '#1a3454', '#4674ab', 5101, true),
+    tacticalFabricEnemy: buildRipstopFabricPBR('#383b36', '#1e211e', '#525144', 5202, true),
+    tacticalDenim: buildRipstopFabricPBR('#3c526d', '#243447', '#546f8e', 5303, false),
+    tacticalVest: buildTacticalVestPBR(),
+    helmetShell: buildHelmetShellPBR(),
+    operatorSkin: buildOperatorSkinPBR(),
   };
 }
