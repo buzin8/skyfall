@@ -28,6 +28,7 @@ export interface TextureLibrary {
   tacticalVest: PBRTextureSet;
   helmetShell: PBRTextureSet;
   operatorSkin: PBRTextureSet;
+  tacticalGlove: PBRTextureSet;
 }
 
 function makeCanvas(w: number, h: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
@@ -1098,6 +1099,82 @@ function buildOperatorSkinPBR(): PBRTextureSet {
   };
 }
 
+/**
+ * Matte Grained Black Leather / Neoprene Tactical Glove PBR texture
+ * (fine leather grain, diagonal grip creases, stitched cuff seams — zero plastic sheen!)
+ */
+function buildTacticalGlovePBR(): PBRTextureSet {
+  const size = 256;
+  const [cCol, col] = makeCanvas(size, size);
+  const [cRough, rough] = makeCanvas(size, size);
+  const [cBump, bump] = makeCanvas(size, size);
+  const rand = mulberry32(4491);
+
+  col.fillStyle = '#252930';
+  col.fillRect(0, 0, size, size);
+  rough.fillStyle = '#bcbcbc';
+  rough.fillRect(0, 0, size, size);
+  bump.fillStyle = '#808080';
+  bump.fillRect(0, 0, size, size);
+
+  // Fine pebbled tactical leather grain
+  for (let i = 0; i < 1100; i++) {
+    const x = rand() * size;
+    const y = rand() * size;
+    const bright = rand() > 0.5;
+    col.fillStyle = bright ? 'rgba(255,255,255,0.045)' : 'rgba(0,0,0,0.09)';
+    col.fillRect(x, y, 2, 2);
+    bump.fillStyle = bright ? 'rgba(168,168,168,0.34)' : 'rgba(92,92,92,0.34)';
+    bump.fillRect(x, y, 2, 2);
+  }
+
+  // Natural leather hand-flex crease folds
+  for (let i = 0; i < 14; i++) {
+    const y = (i / 14) * size;
+    const w = 8 + rand() * 14;
+    const ang = (rand() - 0.5) * 0.45;
+    const cg = col.createLinearGradient(0, 0, 0, w);
+    cg.addColorStop(0, 'rgba(5, 6, 8, 0.42)');
+    cg.addColorStop(0.5, 'rgba(96, 104, 116, 0.16)');
+    cg.addColorStop(1, 'rgba(5, 6, 8, 0.28)');
+    col.save();
+    col.translate(0, y);
+    col.rotate(ang);
+    col.fillStyle = cg;
+    col.fillRect(-30, 0, size + 60, w);
+    col.restore();
+
+    const bg = bump.createLinearGradient(0, 0, 0, w);
+    bg.addColorStop(0, '#3e3e3e');
+    bg.addColorStop(0.5, '#c6c6c6');
+    bg.addColorStop(1, '#4c4c4c');
+    bump.save();
+    bump.translate(0, y);
+    bump.rotate(ang);
+    bump.fillStyle = bg;
+    bump.fillRect(-30, 0, size + 60, w);
+    bump.restore();
+  }
+
+  // Reinforced tactical seam stitching
+  col.strokeStyle = 'rgba(130, 140, 155, 0.24)';
+  col.setLineDash([4, 3]);
+  col.lineWidth = 1.2;
+  col.beginPath();
+  col.moveTo(0, size * 0.35);
+  col.lineTo(size, size * 0.35);
+  col.moveTo(0, size * 0.72);
+  col.lineTo(size, size * 0.72);
+  col.stroke();
+  col.setLineDash([]);
+
+  return {
+    map: toTexture(cCol, 2, 2, true),
+    roughnessMap: toTexture(cRough, 2, 2, false),
+    bumpMap: toTexture(cBump, 2, 2, false),
+  };
+}
+
 function buildRadialSprite(inner: string, mid: string, outer: string, size = 128): THREE.CanvasTexture {
   const [c, ctx] = makeCanvas(size, size);
   const half = size / 2;
@@ -1149,5 +1226,6 @@ export function createTextureLibrary(): TextureLibrary {
     tacticalVest: buildTacticalVestPBR(),
     helmetShell: buildHelmetShellPBR(),
     operatorSkin: buildOperatorSkinPBR(),
+    tacticalGlove: buildTacticalGlovePBR(),
   };
 }
