@@ -117,8 +117,12 @@ class SunfireGame {
   private adsHeld = false;
 
   private lastFrameTime = performance.now();
+  private lastRenderTime = performance.now();
   private fpsAccum = 0;
   private fpsFrames = 0;
+  private spottingTimer = 0;
+  private bloomEnabled = false; // Default direct fast renderer for rock-solid 60 FPS!
+  private readonly targetFrameMs = 1000 / 60 - 1.5; // Smooth 60 FPS cap without skipping 60Hz vblanks!
 
   private menuOverlay = document.getElementById('menu-overlay')!;
   private matchEndOverlay = document.getElementById('match-end-overlay')!;
@@ -127,24 +131,24 @@ class SunfireGame {
   private btnRestart = document.getElementById('btn-restart')!;
 
   constructor() {
-    // 1. High-contrast cinematic WebGL renderer
+    // 1. High-efficiency 60 FPS WebGL renderer
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.16;
+    this.renderer.toneMappingExposure = 1.2;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.container.appendChild(this.renderer.domElement);
 
     // 2. Scene, Camera & PMREM Industrial Environment Reflections
     this.scene = new THREE.Scene();
     this.scene.environment = buildIndustrialEnvironment(this.renderer);
-    this.camera = new THREE.PerspectiveCamera(74, window.innerWidth / window.innerHeight, 0.08, 220);
+    this.camera = new THREE.PerspectiveCamera(74, window.innerWidth / window.innerHeight, 0.08, 180);
     this.scene.add(this.camera);
 
-    // 3. Selective HDR Bloom Post-Processing (clean fallback if WebGL RT unavailable)
+    // 3. Optional half-res Bloom Post-Processing (off by default for locked 60 FPS; toggleable in menu)
     this.setupPostProcessing();
 
     // 4. Build Dark Gritty Industrial Foundry Arena
@@ -174,7 +178,7 @@ class SunfireGame {
       this.camera.updateProjectionMatrix();
       this.renderer.setSize(w, h);
       this.composer?.setSize(w, h);
-      this.bloomPass?.resolution.set(w, h);
+      this.bloomPass?.resolution.set(Math.floor(w * 0.5), Math.floor(h * 0.5));
     });
 
     requestAnimationFrame(this.loop);
@@ -182,18 +186,20 @@ class SunfireGame {
 
   private setupPostProcessing(): void {
     try {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
       const composer = new EffectComposer(this.renderer);
-      composer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-      composer.setSize(window.innerWidth, window.innerHeight);
+      composer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
+      composer.setSize(w, h);
 
       const renderPass = new RenderPass(this.scene, this.camera);
       composer.addPass(renderPass);
 
       const bloomPass = new UnrealBloomPass(
-        new THREE.Vector2(window.innerWidth, window.innerHeight),
-        0.38, // balanced fiery glow without washing out targets
-        0.44, // tight bloom halo radius
-        0.86 // selective HDR threshold for muzzle flashes, fires, embers & neon accents
+        new THREE.Vector2(Math.floor(w * 0.5), Math.floor(h * 0.5)),
+        0.34,
+        0.4,
+        0.88
       );
       composer.addPass(bloomPass);
 
@@ -241,6 +247,17 @@ class SunfireGame {
         document.querySelectorAll('#difficulty-pills .pill').forEach((b) => b.classList.remove('active'));
         btn.classList.add('active');
         this.settings.difficulty = btn.dataset.diff as Difficulty;
+      });
+    });
+
+    document.querySelectorAll<HTMLButtonElement>('#graphics-pills .pill').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('#graphics-pills .pill').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        this.bloomEnabled = btn.dataset.gfx === 'bloom';
+        const dprCap = this.bloomEnabled ? 1.5 : 1.25;
+        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, dprCap));
+        this.composer?.setPixelRatio(Math.min(window.devicePixelRatio, dprCap));
       });
     });
 
@@ -779,6 +796,13 @@ class SunfireGame {
 
   private loop = (now: number): void => {
     requestAnimationFrame(this.loop);
+
+    // 60 FPS frame pacer: locks 120Hz/144Hz monitors smoothly to 60 FPS while never skipping 60Hz vblanks
+    if (now - this.lastRenderTime < this.targetFrameMs) {
+      return;
+    }
+    this.lastRenderTime = now;
+
     const dt = Math.min(0.05, (now - this.lastFrameTime) / 1000);
     this.lastFrameTime = now;
     const elapsed = now * 0.001;
@@ -786,7 +810,7 @@ class SunfireGame {
     this.fpsAccum += dt;
     this.fpsFrames += 1;
     if (this.fpsAccum >= 0.4) {
-      this.hud.updateFps(this.fpsFrames / this.fpsAccum);
+      this.hud.updateFps(Math.min(60, Math.round(this.fpsFrames / this.fpsAccum)));
       this.fpsAccum = 0;
       this.fpsFrames = 0;
     }
@@ -848,7 +872,12 @@ class SunfireGame {
         );
       }
 
-      this.updateSpotting();
+      // Throttle player vision spotting raycasts to 10 Hz
+      this.spottingTimer -= dt;
+      if (this.spottingTimer <= 0) {
+        this.spottingTimer = 0.1;
+        this.updateSpotting();
+      }
       this.updateRoundRules(dt);
 
       const ammo = this.weapons.currentAmmo;
@@ -906,7 +935,7 @@ class SunfireGame {
       }
     }
 
-    if (this.composer) {
+    if (this.bloomEnabled && this.composer) {
       this.composer.render();
     } else {
       this.renderer.render(this.scene, this.camera);

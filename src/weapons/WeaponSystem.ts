@@ -181,6 +181,16 @@ export class WeaponSystem {
   });
   private sparkGeo = new THREE.BoxGeometry(0.024, 0.024, 0.08);
   private emberGeo = new THREE.OctahedronGeometry(0.04, 0);
+  private tracerOuterGeo = (() => {
+    const g = new THREE.CylinderGeometry(0.35, 0.85, 1, 5, 1, true);
+    g.rotateX(Math.PI / 2);
+    return g;
+  })();
+  private tracerCoreGeo = (() => {
+    const g = new THREE.CylinderGeometry(0.16, 0.28, 0.88, 5, 1, true);
+    g.rotateX(Math.PI / 2);
+    return g;
+  })();
   private expCoreGeo = new THREE.IcosahedronGeometry(0.45, 1);
   private expPuffGeo = new THREE.DodecahedronGeometry(0.38, 1);
   private expRingGeo = new THREE.RingGeometry(0.2, 0.36, 20);
@@ -234,21 +244,11 @@ export class WeaponSystem {
       metalness: 0.25,
     });
 
-    for (let i = 0; i < 4; i++) {
-      const l = new THREE.PointLight(0xff9c38, 0, 14, 1.5);
-      l.visible = false;
-      this.fxGroup.add(l);
-      this.lightPool.push(l);
-    }
-
-    // Subtle weapon-mounted tactical fill light illuminating enemies in the dark industrial arena
-    const tacLight = new THREE.SpotLight(0xd9efff, 8, 26, Math.PI / 5.2, 0.65, 1.4);
-    tacLight.position.set(0.18, -0.16, -0.35);
-    const tacTarget = new THREE.Object3D();
-    tacTarget.position.set(0, -0.08, -12);
-    this.camera.add(tacLight);
-    this.camera.add(tacTarget);
-    tacLight.target = tacTarget;
+    // Single shared dynamic combat light (avoids multi-light PBR shader bloat for rock-solid 60 FPS)
+    const combatLight = new THREE.PointLight(0xff9c38, 0, 14, 1.5);
+    combatLight.visible = false;
+    this.fxGroup.add(combatLight);
+    this.lightPool.push(combatLight);
 
     this.models = {
       vandal: this.buildVandalModel(),
@@ -441,8 +441,6 @@ export class WeaponSystem {
     const len = Math.min(dist, 9.5);
     const group = new THREE.Group();
 
-    const outerGeo = new THREE.CylinderGeometry(thickness * 0.35, thickness * 0.85, len, 6, 1, true);
-    outerGeo.rotateX(Math.PI / 2);
     const outerMat = new THREE.MeshBasicMaterial({
       color: colorHex,
       transparent: true,
@@ -451,10 +449,10 @@ export class WeaponSystem {
       depthWrite: false,
       side: THREE.DoubleSide,
     });
-    group.add(new THREE.Mesh(outerGeo, outerMat));
+    const outerMesh = new THREE.Mesh(this.tracerOuterGeo, outerMat);
+    outerMesh.scale.set(thickness, thickness, len);
+    group.add(outerMesh);
 
-    const coreGeo = new THREE.CylinderGeometry(thickness * 0.16, thickness * 0.28, len * 0.88, 5, 1, true);
-    coreGeo.rotateX(Math.PI / 2);
     const coreMat = new THREE.MeshBasicMaterial({
       color: 0xfff2cc,
       transparent: true,
@@ -463,7 +461,9 @@ export class WeaponSystem {
       depthWrite: false,
       side: THREE.DoubleSide,
     });
-    group.add(new THREE.Mesh(coreGeo, coreMat));
+    const coreMesh = new THREE.Mesh(this.tracerCoreGeo, coreMat);
+    coreMesh.scale.set(thickness, thickness, len);
+    group.add(coreMesh);
 
     const t = Math.min(0.84, Math.max(0.34, len / Math.max(dist, 1)));
     const mid = new THREE.Vector3().lerpVectors(start, end, t);
@@ -507,6 +507,13 @@ export class WeaponSystem {
 
       this.fxGroup.add(m);
       this.sparks.push({ mesh: m, vel, life: 0.24 + Math.random() * 0.2, maxLife: 0.42 });
+      if (this.sparks.length > 36) {
+        const old = this.sparks.shift();
+        if (old) {
+          this.fxGroup.remove(old.mesh);
+          (old.mesh.material as THREE.Material).dispose();
+        }
+      }
     }
 
     if (!isAgent) {
@@ -515,7 +522,7 @@ export class WeaponSystem {
       hole.lookAt(point.clone().add(normal));
       this.fxGroup.add(hole);
       this.decals.push({ mesh: hole, life: 16 });
-      if (this.decals.length > 54) {
+      if (this.decals.length > 30) {
         const old = this.decals.shift();
         if (old) this.fxGroup.remove(old.mesh);
       }
@@ -732,9 +739,6 @@ export class WeaponSystem {
       tr.life -= dt;
       if (tr.life <= 0) {
         this.fxGroup.remove(tr.group);
-        tr.group.traverse((obj) => {
-          if (obj instanceof THREE.Mesh) obj.geometry.dispose();
-        });
         tr.outerMat.dispose();
         tr.coreMat.dispose();
         this.tracers.splice(i, 1);

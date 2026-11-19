@@ -44,6 +44,10 @@ export class TacticalAgent {
   private deathAnim = 0;
   private walkPhase = 0;
   private openingHoldTimer = 0;
+  private visionTimer = Math.random() * 0.1;
+  private cachedTargetPos: THREE.Vector3 | null = null;
+  private cachedTargetAim: THREE.Vector3 | null = null;
+  private cachedTargetDist = Infinity;
 
   constructor(
     id: string,
@@ -84,6 +88,10 @@ export class TacticalAgent {
     this.hitFlashTimer = 0;
     this.deathAnim = 0;
     this.openingHoldTimer = holdOpening;
+    this.visionTimer = Math.random() * 0.08;
+    this.cachedTargetPos = null;
+    this.cachedTargetAim = null;
+    this.cachedTargetDist = Infinity;
 
     this.rig.root.visible = true;
     this.rig.root.position.copy(this.pos);
@@ -192,33 +200,43 @@ export class TacticalAgent {
         ? { react: 0.18, spread: 0.032, dmg: 22, speed: 4.15 }
         : { react: 0.31, spread: 0.055, dmg: 17, speed: 3.65 };
 
-    // 1. Find best visible hostile target
-    const myEye = this.getEyePosition();
-    let targetPos: THREE.Vector3 | null = null;
-    let targetAim: THREE.Vector3 | null = null;
-    let bestDist = Infinity;
+    // 1. Throttled 10 Hz staggered LOS vision check (cuts CPU raycasts by ~85% for steady 60 FPS!)
+    this.visionTimer -= dt;
+    if (this.visionTimer <= 0) {
+      this.visionTimer = 0.095 + Math.random() * 0.03;
+      const myEye = this.getEyePosition();
+      let foundPos: THREE.Vector3 | null = null;
+      let foundAim: THREE.Vector3 | null = null;
+      let foundDist = Infinity;
 
-    // Check player if we are enemy
-    if (this.team === 'enemy' && playerAlive) {
-      const dist = myEye.distanceTo(playerEye);
-      if (dist < 42 && hasClearSight(myEye, playerEye, levelMeshes, smokes)) {
-        bestDist = dist;
-        targetPos = playerPos;
-        targetAim = playerEye.clone().add(new THREE.Vector3(0, -0.22, 0));
+      if (this.team === 'enemy' && playerAlive) {
+        const dist = myEye.distanceTo(playerEye);
+        if (dist < 42 && hasClearSight(myEye, playerEye, levelMeshes, smokes)) {
+          foundDist = dist;
+          foundPos = playerPos.clone();
+          foundAim = playerEye.clone().add(new THREE.Vector3(0, -0.22, 0));
+        }
       }
+
+      for (const other of allAgents) {
+        if (!other.alive || other.team === this.team) continue;
+        const otherEye = other.getEyePosition();
+        const dist = myEye.distanceTo(otherEye);
+        if (dist < foundDist && dist < 40 && hasClearSight(myEye, otherEye, levelMeshes, smokes)) {
+          foundDist = dist;
+          foundPos = other.pos.clone();
+          foundAim = otherEye.clone().add(new THREE.Vector3(0, -0.22, 0));
+        }
+      }
+
+      this.cachedTargetPos = foundPos;
+      this.cachedTargetAim = foundAim;
+      this.cachedTargetDist = foundDist;
     }
 
-    // Check opposing AI agents
-    for (const other of allAgents) {
-      if (!other.alive || other.team === this.team) continue;
-      const otherEye = other.getEyePosition();
-      const dist = myEye.distanceTo(otherEye);
-      if (dist < bestDist && dist < 40 && hasClearSight(myEye, otherEye, levelMeshes, smokes)) {
-        bestDist = dist;
-        targetPos = other.pos;
-        targetAim = otherEye.clone().add(new THREE.Vector3(0, -0.22, 0));
-      }
-    }
+    const targetPos = this.cachedTargetPos;
+    const targetAim = this.cachedTargetAim;
+    const bestDist = this.cachedTargetDist;
 
     let moveSpeed = 0;
     let wantCrouch = false;

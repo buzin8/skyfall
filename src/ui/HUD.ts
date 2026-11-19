@@ -8,6 +8,7 @@ interface DamageArc {
 
 export class HUD {
   private hudRoot = document.getElementById('hud')!;
+  private elCrosshair = document.getElementById('crosshair')!;
   private elHp = document.getElementById('hud-hp')!;
   private elShield = document.getElementById('hud-shield')!;
   private elHpBar = document.getElementById('hud-hp-bar')!;
@@ -54,18 +55,38 @@ export class HUD {
   private flashOpacity = 0;
   private damageVignette = 0;
   private damageArcs: DamageArc[] = [];
+  private dmgCanvasDirty = false;
+
+  // Dirty-check caches to prevent per-frame DOM layout thrashing (locked 60 FPS!)
+  private lastGapPx = -1;
+  private lastHp = -1;
+  private lastShield = -1;
+  private lastStim = false;
+  private lastWeaponKey = '';
+  private lastMag = -99;
+  private lastRes = -99;
+  private lastReloading = false;
+  private lastAbKey = '';
+  private lastZone = '';
+  private lastScoreKey = '';
+  private lastFlashStr = '';
+  private lastDmgStr = '';
 
   public setVisible(visible: boolean): void {
     this.hudRoot.classList.toggle('hidden', !visible);
   }
 
   public setCrosshairColor(hex: string): void {
-    document.documentElement.style.setProperty('--ch-color', hex);
+    this.elCrosshair.style.setProperty('--ch-color', hex);
   }
 
   public updateCrosshair(spreadRad: number, isAds: boolean): void {
     const gapPx = Math.round(Math.max(2, Math.min(34, (spreadRad * 460 + 3) * (isAds ? 0.65 : 1))));
-    document.documentElement.style.setProperty('--ch-gap', `${gapPx}px`);
+    if (gapPx !== this.lastGapPx) {
+      this.lastGapPx = gapPx;
+      // Scoped to #crosshair only (avoids full-document :root style invalidation!)
+      this.elCrosshair.style.setProperty('--ch-gap', `${gapPx}px`);
+    }
   }
 
   public showHitmarker(headshot: boolean): void {
@@ -80,7 +101,6 @@ export class HUD {
     this.elKillText.textContent = headshot ? `${label} // HEADSHOT` : label;
     this.elKillIcon.textContent = headshot ? '⌖' : streak >= 5 ? '★' : '✦';
     this.elKillEmblem.classList.remove('hidden');
-    // Force pop animation replay
     this.elKillEmblem.style.animation = 'none';
     void this.elKillEmblem.offsetWidth;
     this.elKillEmblem.style.animation = '';
@@ -136,14 +156,23 @@ export class HUD {
   public updateVitals(hp: number, shield: number, stimActive: boolean): void {
     const clampedHp = Math.max(0, Math.ceil(hp));
     const clampedShield = Math.max(0, Math.ceil(shield));
-    this.elHp.textContent = String(clampedHp);
-    this.elShield.textContent = String(clampedShield);
-    this.elHpBar.style.width = `${clampedHp}%`;
-    this.elHpBar.style.background =
-      clampedHp <= 30
-        ? 'linear-gradient(90deg, #ff3b54, #ff7086)'
-        : 'linear-gradient(90deg, #25e5c1, #32e5ff)';
-    this.elFxStim.style.opacity = stimActive ? '1' : '0';
+    if (clampedHp !== this.lastHp) {
+      this.lastHp = clampedHp;
+      this.elHp.textContent = String(clampedHp);
+      this.elHpBar.style.width = `${clampedHp}%`;
+      this.elHpBar.style.background =
+        clampedHp <= 30
+          ? 'linear-gradient(90deg, #ff3b54, #ff7086)'
+          : 'linear-gradient(90deg, #25e5c1, #32e5ff)';
+    }
+    if (clampedShield !== this.lastShield) {
+      this.lastShield = clampedShield;
+      this.elShield.textContent = String(clampedShield);
+    }
+    if (stimActive !== this.lastStim) {
+      this.lastStim = stimActive;
+      this.elFxStim.style.opacity = stimActive ? '1' : '0';
+    }
   }
 
   public updateWeapon(
@@ -154,24 +183,36 @@ export class HUD {
     isReloading: boolean,
     reloadProgress: number
   ): void {
-    this.elWepName.textContent = weapon.name;
-    this.elFireMode.textContent = weapon.fireMode;
-
-    if (weapon.id === 'knife') {
-      this.elMag.textContent = '∞';
-      this.elRes.textContent = '';
-      this.elMag.classList.remove('low');
-    } else {
-      this.elMag.textContent = String(mag);
-      this.elRes.textContent = String(reserve);
-      this.elMag.classList.toggle('low', mag <= Math.ceil(weapon.magSize * 0.25));
+    const wepKey = `${weapon.id}:${slotIndex}`;
+    if (wepKey !== this.lastWeaponKey) {
+      this.lastWeaponKey = wepKey;
+      this.elWepName.textContent = weapon.name;
+      this.elFireMode.textContent = weapon.fireMode;
+      for (let i = 0; i < 3; i++) {
+        document.getElementById(`wslot-${i}`)?.classList.toggle('active', i === slotIndex);
+      }
+      this.lastMag = -99;
+      this.lastRes = -99;
     }
 
-    for (let i = 0; i < 3; i++) {
-      document.getElementById(`wslot-${i}`)?.classList.toggle('active', i === slotIndex);
+    if (mag !== this.lastMag || reserve !== this.lastRes) {
+      this.lastMag = mag;
+      this.lastRes = reserve;
+      if (weapon.id === 'knife') {
+        this.elMag.textContent = '∞';
+        this.elRes.textContent = '';
+        this.elMag.classList.remove('low');
+      } else {
+        this.elMag.textContent = String(mag);
+        this.elRes.textContent = String(reserve);
+        this.elMag.classList.toggle('low', mag <= Math.ceil(weapon.magSize * 0.25));
+      }
     }
 
-    this.elReloadWrap.classList.toggle('hidden', !isReloading);
+    if (isReloading !== this.lastReloading) {
+      this.lastReloading = isReloading;
+      this.elReloadWrap.classList.toggle('hidden', !isReloading);
+    }
     if (isReloading) {
       const circ = 113.1;
       this.elReloadFg.style.strokeDashoffset = String(circ * (1 - reloadProgress));
@@ -179,6 +220,10 @@ export class HUD {
   }
 
   public updateAbilities(charges: { stim: number; flash: number; smoke: number }, stimActive: boolean): void {
+    const key = `${charges.stim}:${charges.flash}:${charges.smoke}:${stimActive}`;
+    if (key === this.lastAbKey) return;
+    this.lastAbKey = key;
+
     this.elAbC.classList.toggle('depleted', charges.stim <= 0 && !stimActive);
     this.elAbC.classList.toggle('active-fx', stimActive);
     this.elAbQ.classList.toggle('depleted', charges.flash <= 0);
@@ -197,12 +242,17 @@ export class HUD {
     allyAlive: boolean[],
     enemyAlive: boolean[]
   ): void {
+    const secInt = Math.floor(Math.max(0, timeSec));
+    const key = `${allyScore}:${enemyScore}:${roundLabel}:${secInt}:${allyAlive.join('')}:${enemyAlive.join('')}`;
+    if (key === this.lastScoreKey) return;
+    this.lastScoreKey = key;
+
     this.elScoreAlly.textContent = String(allyScore);
     this.elScoreEnemy.textContent = String(enemyScore);
     this.elRoundLabel.textContent = roundLabel;
 
-    const mins = Math.floor(Math.max(0, timeSec) / 60);
-    const secs = Math.floor(Math.max(0, timeSec) % 60);
+    const mins = Math.floor(secInt / 60);
+    const secs = secInt % 60;
     this.elTimer.textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
 
     this.renderPips(this.elAllyPips, allyAlive, 'ally');
@@ -223,6 +273,8 @@ export class HUD {
   }
 
   public updateZone(name: string): void {
+    if (name === this.lastZone) return;
+    this.lastZone = name;
     this.elZone.textContent = name;
   }
 
@@ -254,37 +306,50 @@ export class HUD {
 
     if (this.flashOpacity > 0) {
       this.flashOpacity = Math.max(0, this.flashOpacity - dt * 0.85);
-      this.elFxFlash.style.opacity = this.flashOpacity.toFixed(3);
+    }
+    const fStr = this.flashOpacity.toFixed(2);
+    if (fStr !== this.lastFlashStr) {
+      this.lastFlashStr = fStr;
+      this.elFxFlash.style.opacity = fStr;
     }
 
     const baseVignette = lowHp ? 0.32 : 0;
     this.damageVignette = Math.max(baseVignette, this.damageVignette - dt * 1.45);
-    this.elFxDmg.style.opacity = this.damageVignette.toFixed(3);
+    const dStr = this.damageVignette.toFixed(2);
+    if (dStr !== this.lastDmgStr) {
+      this.lastDmgStr = dStr;
+      this.elFxDmg.style.opacity = dStr;
+    }
 
-    // Draw directional damage arcs
-    const ctx = this.dmgArcCtx;
-    ctx.clearRect(0, 0, this.dmgArcCanvas.width, this.dmgArcCanvas.height);
-    if (this.damageArcs.length > 0) {
-      const cx = this.dmgArcCanvas.width / 2;
-      const cy = this.dmgArcCanvas.height / 2;
-      for (let i = this.damageArcs.length - 1; i >= 0; i--) {
-        const arc = this.damageArcs[i];
-        arc.life -= dt;
-        if (arc.life <= 0) {
-          this.damageArcs.splice(i, 1);
-          continue;
+    // Only draw/clear damage arc canvas when active
+    if (this.damageArcs.length > 0 || this.dmgCanvasDirty) {
+      const ctx = this.dmgArcCtx;
+      ctx.clearRect(0, 0, this.dmgArcCanvas.width, this.dmgArcCanvas.height);
+      if (this.damageArcs.length > 0) {
+        this.dmgCanvasDirty = true;
+        const cx = this.dmgArcCanvas.width / 2;
+        const cy = this.dmgArcCanvas.height / 2;
+        for (let i = this.damageArcs.length - 1; i >= 0; i--) {
+          const arc = this.damageArcs[i];
+          arc.life -= dt;
+          if (arc.life <= 0) {
+            this.damageArcs.splice(i, 1);
+            continue;
+          }
+          const alpha = (arc.life / arc.maxLife) * 0.9;
+          ctx.save();
+          ctx.translate(cx, cy);
+          ctx.rotate(arc.angle - Math.PI / 2);
+          ctx.strokeStyle = `rgba(255, 59, 84, ${alpha.toFixed(2)})`;
+          ctx.lineWidth = 4.5;
+          ctx.lineCap = 'round';
+          ctx.beginPath();
+          ctx.arc(0, 0, 138, -0.3, 0.3);
+          ctx.stroke();
+          ctx.restore();
         }
-        const alpha = (arc.life / arc.maxLife) * 0.9;
-        ctx.save();
-        ctx.translate(cx, cy);
-        ctx.rotate(arc.angle - Math.PI / 2);
-        ctx.strokeStyle = `rgba(255, 59, 84, ${alpha.toFixed(2)})`;
-        ctx.lineWidth = 4.5;
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.arc(0, 0, 138, -0.3, 0.3);
-        ctx.stroke();
-        ctx.restore();
+      } else {
+        this.dmgCanvasDirty = false;
       }
     }
   }

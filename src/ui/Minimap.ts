@@ -4,8 +4,10 @@ import { TacticalAgent } from '../entities/AgentAI';
 
 export class Minimap {
   private ctx: CanvasRenderingContext2D;
+  private staticLayer: HTMLCanvasElement;
   private w: number;
   private h: number;
+  private lastDrawMs = 0;
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -15,6 +17,7 @@ export class Minimap {
     this.ctx = canvas.getContext('2d')!;
     this.w = canvas.width;
     this.h = canvas.height;
+    this.staticLayer = this.bakeStaticLayer();
   }
 
   private toMap(x: number, z: number): [number, number] {
@@ -26,32 +29,25 @@ export class Minimap {
     return [pad + nx * (this.w - pad * 2), pad + nz * (this.h - pad * 2)];
   }
 
-  public render(
-    playerPos: THREE.Vector3,
-    playerYaw: number,
-    agents: TacticalAgent[],
-    smokes: SmokeCloud[]
-  ): void {
-    const ctx = this.ctx;
-    ctx.clearRect(0, 0, this.w, this.h);
+  private bakeStaticLayer(): HTMLCanvasElement {
+    const off = document.createElement('canvas');
+    off.width = this.w;
+    off.height = this.h;
+    const ctx = off.getContext('2d')!;
 
-    // Deep obsidian translucent radar slate
     ctx.fillStyle = 'rgba(8, 12, 18, 0.92)';
     ctx.fillRect(0, 0, this.w, this.h);
 
-    // Walkable arena silhouette
     const [fx0, fz0] = this.toMap(this.bounds.minX, this.bounds.minZ);
     const [fx1, fz1] = this.toMap(this.bounds.maxX, this.bounds.maxZ);
     ctx.fillStyle = '#141c26';
     ctx.fillRect(fx0, fz0, fx1 - fx0, fz1 - fz0);
 
-    // Central industrial combat yard highlight
     const [cx0, cz0] = this.toMap(-9.5, -6.0);
     const [cx1, cz1] = this.toMap(9.5, 8.4);
     ctx.fillStyle = 'rgba(40, 216, 255, 0.06)';
     ctx.fillRect(cx0, cz0, cx1 - cx0, cz1 - cz0);
 
-    // Crisp tactical coordinate hairlines
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.045)';
     ctx.lineWidth = 1;
     for (let i = 1; i < 4; i++) {
@@ -65,7 +61,6 @@ export class Minimap {
       ctx.stroke();
     }
 
-    // Structural walls, steel pillars & cover crates
     const scaleX = (this.w - 24) / (this.bounds.maxX - this.bounds.minX);
     const scaleZ = (this.h - 24) / (this.bounds.maxZ - this.bounds.minZ);
 
@@ -80,7 +75,25 @@ export class Minimap {
       ctx.fillRect(mx - rw / 2, mz - rd / 2, rw, rd);
     }
 
-    // Active tactical smokes
+    return off;
+  }
+
+  public render(
+    playerPos: THREE.Vector3,
+    playerYaw: number,
+    agents: TacticalAgent[],
+    smokes: SmokeCloud[]
+  ): void {
+    // Throttle radar redraw to ~25 Hz (super smooth while slashing 2D canvas CPU work)
+    const now = performance.now();
+    if (now - this.lastDrawMs < 38) return;
+    this.lastDrawMs = now;
+
+    const ctx = this.ctx;
+    ctx.drawImage(this.staticLayer, 0, 0);
+
+    const scaleX = (this.w - 24) / (this.bounds.maxX - this.bounds.minX);
+
     for (const s of smokes) {
       const [sx, sz] = this.toMap(s.pos.x, s.pos.z);
       const sr = s.radius * scaleX;
@@ -93,7 +106,6 @@ export class Minimap {
       ctx.stroke();
     }
 
-    // Agents (Allies cyan, Spotted Enemies crimson)
     for (const a of agents) {
       if (!a.alive) continue;
       if (a.team === 'enemy' && a.spottedTimer <= 0) continue;
@@ -107,7 +119,6 @@ export class Minimap {
       ctx.stroke();
     }
 
-    // Player FOV cone & chevron
     const [px, pz] = this.toMap(playerPos.x, playerPos.z);
     const lookAngle = -Math.PI / 2 - playerYaw;
 

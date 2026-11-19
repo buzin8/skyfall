@@ -276,57 +276,42 @@ export class LevelBuilder {
 
     scene.fog = new THREE.FogExp2(0x0c1118, 0.023);
 
-    const hemi = new THREE.HemisphereLight(0x3a5b7a, 0x201319, 0.65);
+    const hemi = new THREE.HemisphereLight(0x4b7499, 0x261a22, 0.92);
     scene.add(hemi);
 
-    const keyLight = new THREE.DirectionalLight(0x8ec8ff, 1.35);
+    const keyLight = new THREE.DirectionalLight(0x9bd2ff, 1.45);
     keyLight.position.set(-14, 24, -12);
     keyLight.castShadow = true;
-    keyLight.shadow.mapSize.set(2048, 2048);
+    keyLight.shadow.mapSize.set(1024, 1024);
     keyLight.shadow.camera.near = 2;
-    keyLight.shadow.camera.far = 70;
-    keyLight.shadow.camera.left = -24;
-    keyLight.shadow.camera.right = 24;
-    keyLight.shadow.camera.top = 24;
-    keyLight.shadow.camera.bottom = -24;
-    keyLight.shadow.bias = -0.0006;
+    keyLight.shadow.camera.far = 62;
+    keyLight.shadow.camera.left = -20;
+    keyLight.shadow.camera.right = 20;
+    keyLight.shadow.camera.top = 20;
+    keyLight.shadow.camera.bottom = -20;
+    keyLight.shadow.bias = -0.0008;
     keyLight.shadow.normalBias = 0.03;
     scene.add(keyLight);
 
-    const rimWarm = new THREE.DirectionalLight(0xff7733, 0.45);
-    rimWarm.position.set(16, 6, 12);
-    scene.add(rimWarm);
-
-    const crimsonWest = new THREE.PointLight(0xff1e5a, 24, 20, 1.45);
-    crimsonWest.position.set(-7.6, 4.2, 4.5);
+    // Consolidated 3-color dramatic industrial point lights (keeps PBR shader blazing fast for 60 FPS!)
+    const crimsonWest = new THREE.PointLight(0xff245f, 26, 24, 1.35);
+    crimsonWest.position.set(-6.8, 4.4, 5.2);
     this.group.add(crimsonWest);
 
-    const crimsonEntry = new THREE.PointLight(0xd91c63, 16, 16, 1.5);
-    crimsonEntry.position.set(5.4, 3.6, 10.2);
-    this.group.add(crimsonEntry);
-
-    const cyanArchBack = new THREE.PointLight(0x28e8ff, 34, 24, 1.35);
-    cyanArchBack.position.set(0, 4.6, -12.2);
+    const cyanArchBack = new THREE.PointLight(0x28e8ff, 34, 28, 1.3);
+    cyanArchBack.position.set(0, 4.8, -11.5);
     this.group.add(cyanArchBack);
 
-    const cyanOverhead = new THREE.PointLight(0x42d6ff, 18, 19, 1.5);
-    cyanOverhead.position.set(2.4, 5.8, -0.5);
-    this.group.add(cyanOverhead);
+    const cyanYard = new THREE.PointLight(0x42d6ff, 18, 22, 1.4);
+    cyanYard.position.set(4.5, 5.6, 0.5);
+    this.group.add(cyanYard);
     this.flickerLights.push({
-      light: cyanOverhead,
+      light: cyanYard,
       baseIntensity: 18,
       speed: 1,
       phase: 2.2,
       mode: 'fluorescent',
     });
-
-    const westAlleyRed = new THREE.PointLight(0xff2954, 18, 16, 1.5);
-    westAlleyRed.position.set(-12.5, 4.0, -2.0);
-    this.group.add(westAlleyRed);
-
-    const eastBayCyan = new THREE.PointLight(0x22d8ff, 18, 17, 1.5);
-    eastBayCyan.position.set(12.5, 4.2, -3.5);
-    this.group.add(eastBayCyan);
   }
 
   private addBox(
@@ -356,9 +341,10 @@ export class LevelBuilder {
     } = opts;
 
     const geo = new THREE.BoxGeometry(w, h, d);
+    // Non-hero decorative boxes skip shadow casting by default to keep shadow pass super fast (60 FPS)
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(x, y, z);
-    mesh.castShadow = castShadow;
+    mesh.castShadow = collide ? castShadow : false;
     mesh.receiveShadow = receiveShadow;
     this.group.add(mesh);
 
@@ -388,17 +374,15 @@ export class LevelBuilder {
   }
 
   private buildWetFloorsAndDebris(): void {
-    const wetFloorMat = new THREE.MeshPhysicalMaterial({
+    // Optimized single-lobe wet PBR floor (reflects PMREM environment vividly in puddles at half shader cost!)
+    const wetFloorMat = new THREE.MeshStandardMaterial({
       map: this.tex.wetAsphalt.map,
       roughnessMap: this.tex.wetAsphalt.roughnessMap,
       bumpMap: this.tex.wetAsphalt.bumpMap,
-      bumpScale: 0.038,
-      roughness: 0.88,
-      metalness: 0.18,
-      clearcoat: 0.62,
-      clearcoatRoughness: 0.16,
-      clearcoatRoughnessMap: this.tex.wetAsphalt.roughnessMap,
-      envMapIntensity: 2.15,
+      bumpScale: 0.036,
+      roughness: 0.78,
+      metalness: 0.34,
+      envMapIntensity: 2.4,
     });
 
     const floorMesh = new THREE.Mesh(new THREE.PlaneGeometry(34, 36), wetFloorMat);
@@ -439,21 +423,19 @@ export class LevelBuilder {
       [2.6, -5.1, 0.95],
       [-4.1, -9.8, 1.1],
       [5.2, -8.5, 0.9],
-      [-11.8, 2.2, 1.05],
-      [11.4, -1.6, 1.1],
     ];
     for (let i = 0; i < rubbleSpots.length; i++) {
       const [rx, rz, sc] = rubbleSpots[i];
-      for (let k = 0; k < 3; k++) {
-        const chunk = new THREE.Mesh(rubbleGeo, k % 2 === 0 ? this.matConcrete : this.matSteel);
+      for (let k = 0; k < 2; k++) {
+        const chunk = new THREE.Mesh(rubbleGeo, k === 0 ? this.matConcrete : this.matSteel);
         chunk.position.set(
-          rx + Math.sin(i * 3 + k * 2.1) * 0.45,
+          rx + Math.sin(i * 3 + k * 2.1) * 0.42,
           0.07 * sc,
-          rz + Math.cos(i * 2 + k * 1.9) * 0.45
+          rz + Math.cos(i * 2 + k * 1.9) * 0.42
         );
-        chunk.scale.set(sc * (0.7 + k * 0.25), sc * 0.45, sc * (0.65 + (2 - k) * 0.2));
+        chunk.scale.set(sc * (0.75 + k * 0.25), sc * 0.45, sc * (0.65 + (1 - k) * 0.25));
         chunk.rotation.set(k * 0.7, i * 1.2, k * 0.4);
-        chunk.castShadow = true;
+        chunk.castShadow = false;
         chunk.receiveShadow = true;
         this.group.add(chunk);
       }
@@ -756,13 +738,13 @@ export class LevelBuilder {
     this.addBox(-7.4, 0.55, -4.65, 1.3, 1.1, 1.2, this.matCrate, { minimap: 'crate' });
     this.addBox(-6.2, 0.42, -4.85, 0.95, 0.84, 0.95, this.matCrate, { minimap: 'crate' });
 
-    this.addBurningFireBarrel(-5.25, -4.75, 28, 0.4);
-    this.addBurningFireBarrel(6.9, 5.5, 24, 2.7);
-    this.addBurningFireBarrel(-11.2, -13.6, 20, 4.1);
+    this.addBurningFireBarrel(-5.25, -4.75, 28, 0.4, true);
+    this.addBurningFireBarrel(6.9, 5.5, 0, 2.7, false);
+    this.addBurningFireBarrel(-11.2, -13.6, 0, 4.1, false);
   }
 
-  private addBurningFireBarrel(x: number, z: number, lightIntensity: number, phase: number): void {
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.41, 0.39, 1.06, 14), this.matPipeDark);
+  private addBurningFireBarrel(x: number, z: number, lightIntensity: number, phase: number, withPointLight = true): void {
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.41, 0.39, 1.06, 12), this.matPipeDark);
     barrel.position.set(x, 0.53, z);
     barrel.castShadow = true;
     barrel.receiveShadow = true;
@@ -771,14 +753,14 @@ export class LevelBuilder {
     this.raycastMeshes.push(barrel);
 
     for (const ry of [0.28, 0.78]) {
-      const rib = new THREE.Mesh(new THREE.TorusGeometry(0.415, 0.025, 6, 16), this.matSteel);
+      const rib = new THREE.Mesh(new THREE.TorusGeometry(0.415, 0.025, 5, 14), this.matSteel);
       rib.rotation.x = Math.PI / 2;
       rib.position.set(x, ry, z);
       this.group.add(rib);
     }
 
     const coals = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.36, 0.34, 0.08, 12),
+      new THREE.CylinderGeometry(0.36, 0.34, 0.08, 10),
       new THREE.MeshBasicMaterial({ color: 0xff922e })
     );
     coals.position.set(x, 1.02, z);
@@ -809,16 +791,18 @@ export class LevelBuilder {
     this.group.add(inner);
     this.flameMeshes.push({ mesh: inner, baseY: 1.28, phase: phase + 1.5, baseScale: 0.85 });
 
-    const fireLight = new THREE.PointLight(0xff6b1c, lightIntensity, 16, 1.45);
-    fireLight.position.set(x, 1.72, z);
-    this.group.add(fireLight);
-    this.flickerLights.push({
-      light: fireLight,
-      baseIntensity: lightIntensity,
-      speed: 7.5,
-      phase,
-      mode: 'fire',
-    });
+    if (withPointLight && lightIntensity > 0) {
+      const fireLight = new THREE.PointLight(0xff6b1c, lightIntensity, 20, 1.35);
+      fireLight.position.set(x, 1.72, z);
+      this.group.add(fireLight);
+      this.flickerLights.push({
+        light: fireLight,
+        baseIntensity: lightIntensity,
+        speed: 7.5,
+        phase,
+        mode: 'fire',
+      });
+    }
 
     this.colliders.push({
       minX: x - 0.45,
@@ -987,7 +971,7 @@ export class LevelBuilder {
       this.group.add(plane);
     }
 
-    const count = 260;
+    const count = 120;
     const positions = new Float32Array(count * 3);
     for (let i = 0; i < count; i++) {
       positions[i * 3] = (Math.random() - 0.5) * 26;
