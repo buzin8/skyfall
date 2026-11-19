@@ -21,6 +21,7 @@ export interface TextureLibrary {
   smokeSprite: THREE.CanvasTexture;
   rifleStencil: THREE.CanvasTexture;
   goldSleeve: PBRTextureSet;
+  desertTan: PBRTextureSet;
 }
 
 function makeCanvas(w: number, h: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
@@ -767,6 +768,71 @@ function buildGoldSleevePBR(): PBRTextureSet {
   };
 }
 
+/**
+ * Sleek Desert-Tan / Sand-Gold tactical weapon cerakote PBR texture
+ * (smooth matte FDE alloy & polymer finish with fine brushed micro-grain and subtle edge patina)
+ */
+function buildDesertTanPBR(): PBRTextureSet {
+  const size = 256;
+  const [cCol, col] = makeCanvas(size, size);
+  const [cRough, rough] = makeCanvas(size, size);
+  const [cBump, bump] = makeCanvas(size, size);
+  const rand = mulberry32(7731);
+
+  const grad = col.createLinearGradient(0, 0, size, size);
+  grad.addColorStop(0, '#dfc07c');
+  grad.addColorStop(0.5, '#e8ca89');
+  grad.addColorStop(1, '#c9a45f');
+  col.fillStyle = grad;
+  col.fillRect(0, 0, size, size);
+
+  rough.fillStyle = '#848484';
+  rough.fillRect(0, 0, size, size);
+  bump.fillStyle = '#808080';
+  bump.fillRect(0, 0, size, size);
+
+  // Soft tonal anodizing variations (no harsh dark borders!)
+  for (let i = 0; i < 60; i++) {
+    const x = rand() * size;
+    const y = rand() * size;
+    const r = 16 + rand() * 44;
+    const dark = rand() > 0.5;
+    col.fillStyle = dark
+      ? `rgba(118, 92, 52, ${0.04 + rand() * 0.05})`
+      : `rgba(255, 240, 198, ${0.04 + rand() * 0.06})`;
+    col.beginPath();
+    col.arc(x, y, r, 0, Math.PI * 2);
+    col.fill();
+  }
+
+  // Fine horizontal brushed alloy micro-grain
+  for (let i = 0; i < 80; i++) {
+    const x = rand() * size;
+    const y = rand() * size;
+    const len = 18 + rand() * 52;
+    const bright = rand() > 0.45;
+    col.strokeStyle = bright ? 'rgba(255, 242, 208, 0.14)' : 'rgba(92, 72, 42, 0.14)';
+    col.lineWidth = 0.8;
+    col.beginPath();
+    col.moveTo(x, y);
+    col.lineTo(x + len, y);
+    col.stroke();
+
+    bump.strokeStyle = bright ? 'rgba(148,148,148,0.22)' : 'rgba(110,110,110,0.22)';
+    bump.lineWidth = 0.8;
+    bump.beginPath();
+    bump.moveTo(x, y);
+    bump.lineTo(x + len, y);
+    bump.stroke();
+  }
+
+  return {
+    map: toTexture(cCol, 2, 2, true),
+    roughnessMap: toTexture(cRough, 2, 2, false),
+    bumpMap: toTexture(cBump, 2, 2, false),
+  };
+}
+
 function buildRadialSprite(inner: string, mid: string, outer: string, size = 128): THREE.CanvasTexture {
   const [c, ctx] = makeCanvas(size, size);
   const half = size / 2;
@@ -811,5 +877,6 @@ export function createTextureLibrary(): TextureLibrary {
     ),
     rifleStencil: buildRifleStencilTexture(),
     goldSleeve: buildGoldSleevePBR(),
+    desertTan: buildDesertTanPBR(),
   };
 }

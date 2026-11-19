@@ -333,7 +333,7 @@ class SunfireGame {
       if (this.paused) return;
       this.sound.unlock();
       if (document.pointerLockElement !== this.renderer.domElement) {
-        this.renderer.domElement.requestPointerLock?.();
+        Promise.resolve(this.renderer.domElement.requestPointerLock?.()).catch(() => {});
       }
       if (e.button === 0) {
         this.fireHeld = true;
@@ -482,7 +482,7 @@ class SunfireGame {
     this.hud.setVisible(true);
     this.btnDeployLabel.textContent = 'RESUME OPERATION';
     this.btnRestart.classList.remove('hidden');
-    this.renderer.domElement.requestPointerLock?.();
+    Promise.resolve(this.renderer.domElement.requestPointerLock?.()).catch(() => {});
   }
 
   private pauseGame(): void {
