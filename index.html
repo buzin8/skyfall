@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SUNFIRE // SECTOR 07 Tactical FPS</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Rajdhani:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="game-container"></div>
+
+    <!-- Flash / Damage / Low-HP Screen FX -->
+    <div id="fx-flash"></div>
+    <div id="fx-damage-vignette"></div>
+    <div id="fx-stim-vignette"></div>
+    <canvas id="fx-damage-arcs" width="420" height="420"></canvas>
+
+    <!-- In-Game Minimal Tactical HUD -->
+    <div id="hud" class="hidden">
+      <!-- Top-Left Radar -->
+      <div id="minimap-wrap">
+        <canvas id="minimap-canvas" width="184" height="184"></canvas>
+        <div id="zone-label">SOUTH ACCESS</div>
+      </div>
+
+      <!-- Top-Center Score & Clock -->
+      <div id="scoreboard-bar">
+        <div class="team-block ally">
+          <div class="agent-pips" id="ally-pips"></div>
+          <div class="team-score" id="score-ally">0</div>
+        </div>
+        <div class="round-center">
+          <div id="round-timer">1:30</div>
+          <div id="round-label">ROUND 1</div>
+        </div>
+        <div class="team-block enemy">
+          <div class="team-score" id="score-enemy">0</div>
+          <div class="agent-pips" id="enemy-pips"></div>
+        </div>
+      </div>
+
+      <!-- Top-Right Killfeed & Telemetry -->
+      <div id="top-right-panel">
+        <div id="perf-readout">60 FPS</div>
+        <div id="killfeed"></div>
+      </div>
+
+      <!-- Center Dynamic Crosshair -->
+      <div id="crosshair">
+        <div class="ch-line ch-top"></div>
+        <div class="ch-line ch-bottom"></div>
+        <div class="ch-line ch-left"></div>
+        <div class="ch-line ch-right"></div>
+        <div class="ch-dot"></div>
+        <div id="hitmarker">
+          <span class="hm hm-1"></span>
+          <span class="hm hm-2"></span>
+          <span class="hm hm-3"></span>
+          <span class="hm hm-4"></span>
+        </div>
+        <div id="reload-ring-wrap" class="hidden">
+          <svg viewBox="0 0 44 44">
+            <circle class="ring-bg" cx="22" cy="22" r="18"></circle>
+            <circle class="ring-fg" id="reload-ring-fg" cx="22" cy="22" r="18"></circle>
+          </svg>
+          <span id="reload-text">RELOADING</span>
+        </div>
+      </div>
+
+      <!-- Center Round Status Banner -->
+      <div id="round-banner" class="hidden">
+        <div id="round-banner-sub">TACTICAL BREACH</div>
+        <div id="round-banner-title">ROUND START</div>
+      </div>
+
+      <!-- Kill Emblem Indicator -->
+      <div id="kill-emblem" class="hidden">
+        <div id="kill-emblem-diamond">
+          <span id="kill-emblem-icon">✦</span>
+        </div>
+        <div id="kill-emblem-text">ELIMINATION</div>
+      </div>
+
+      <!-- Bottom Minimal Glass Deck -->
+      <div id="bottom-hud">
+        <!-- Vitals -->
+        <div class="hud-panel vitals-panel">
+          <div class="vitals-row">
+            <div class="vital-stat shield">
+              <span class="vital-icon">◈</span>
+              <span class="vital-val" id="hud-shield">50</span>
+            </div>
+            <div class="vital-divider"></div>
+            <div class="vital-stat health">
+              <span class="vital-icon">+</span>
+              <span class="vital-val" id="hud-hp">100</span>
+            </div>
+          </div>
+          <div class="hp-bar-track">
+            <div class="hp-bar-fill" id="hud-hp-bar"></div>
+          </div>
+        </div>
+
+        <!-- Tactical Ordnance -->
+        <div class="hud-panel abilities-panel">
+          <div class="ability-slot" id="ab-c" data-key="C">
+            <div class="ab-key">C</div>
+            <div class="ab-icon">⚡</div>
+            <div class="ab-name">STIM</div>
+            <div class="ab-charges" id="ab-c-charges">●</div>
+          </div>
+          <div class="ability-slot" id="ab-q" data-key="Q">
+            <div class="ab-key">Q</div>
+            <div class="ab-icon">☀</div>
+            <div class="ab-name">FLASH</div>
+            <div class="ab-charges" id="ab-q-charges">●●</div>
+          </div>
+          <div class="ability-slot" id="ab-e" data-key="E">
+            <div class="ab-key">E</div>
+            <div class="ab-icon">☁</div>
+            <div class="ab-name">SMOKE</div>
+            <div class="ab-charges" id="ab-e-charges">●●</div>
+          </div>
+        </div>
+
+        <!-- Weapon & Ammo -->
+        <div class="hud-panel ammo-panel">
+          <div class="ammo-top">
+            <div class="weapon-meta">
+              <span id="hud-weapon-name">VANDAL 7.62</span>
+              <span id="hud-fire-mode">AUTO</span>
+            </div>
+            <div class="ammo-readout">
+              <span id="hud-ammo-mag">25</span>
+              <span class="ammo-slash">/</span>
+              <span id="hud-ammo-res">75</span>
+            </div>
+          </div>
+          <div class="weapon-slots">
+            <div class="w-slot active" id="wslot-0"><span>1</span> VANDAL</div>
+            <div class="w-slot" id="wslot-1"><span>2</span> GHOST</div>
+            <div class="w-slot" id="wslot-2"><span>3</span> KNIFE</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Ultra-Subtle Controls Bar -->
+      <div id="controls-strip">
+        <span><b>WASD</b> Move</span>
+        <span><b>SHIFT</b> Walk</span>
+        <span><b>CTRL</b> Crouch</span>
+        <span><b>LMB / RMB</b> Fire / ADS</span>
+        <span><b>R</b> Reload</span>
+        <span><b>Q E C</b> Ordnance</span>
+        <span><b>1-3</b> Loadout</span>
+        <span><b>ESC</b> Menu</span>
+      </div>
+    </div>
+
+    <!-- Frosted Dark Glass Main Menu / Pause Overlay -->
+    <div id="menu-overlay">
+      <div class="menu-backdrop"></div>
+      <div class="menu-shell">
+        <div class="menu-header">
+          <div class="brand-tag">SECTOR 07 // FOUNDRY COMBAT ZONE</div>
+          <h1 class="brand-title">SUNFIRE</h1>
+          <p class="brand-sub">Industrial 3D Tactical Arena — Wet Surface Reflections, Dynamic Firelight &amp; Precision Gunplay</p>
+        </div>
+
+        <div class="menu-grid">
+          <div class="menu-card">
+            <div class="card-label">OPERATION MODE</div>
+            <div class="mode-list" id="mode-list">
+              <button class="mode-btn active" data-mode="tactical">
+                <span class="mode-title">FOUNDRY BREACH (3v5)</span>
+                <span class="mode-desc">First to 5 rounds alongside vanguard allies EMBER &amp; PULSE against 5 hostile units</span>
+              </button>
+              <button class="mode-btn" data-mode="clutch">
+                <span class="mode-title">SOLO CLUTCH (1v5)</span>
+                <span class="mode-desc">No backup — clear all 5 armored hostiles across tactical rounds</span>
+              </button>
+              <button class="mode-btn" data-mode="skirmish">
+                <span class="mode-title">ENDLESS SKIRMISH</span>
+                <span class="mode-desc">Continuous industrial waves with shield replenishment on elimination</span>
+              </button>
+            </div>
+
+            <div class="action-row">
+              <button id="btn-deploy" class="btn-primary">
+                <span id="btn-deploy-label">DEPLOY TO SECTOR 07</span>
+              </button>
+              <button id="btn-restart" class="btn-secondary hidden">RESTART</button>
+            </div>
+          </div>
+
+          <div class="menu-card settings-card">
+            <div class="card-label">COMBAT CONFIGURATION</div>
+
+            <div class="setting-row">
+              <label for="opt-sens">Mouse Sensitivity <span id="val-sens">1.00</span></label>
+              <input id="opt-sens" type="range" min="0.25" max="2.5" step="0.05" value="1.0" />
+            </div>
+
+            <div class="setting-row">
+              <label for="opt-vol">Master Audio <span id="val-vol">75%</span></label>
+              <input id="opt-vol" type="range" min="0" max="1" step="0.05" value="0.75" />
+            </div>
+
+            <div class="setting-row">
+              <label>Reticle Accent</label>
+              <div class="swatch-row" id="crosshair-colors">
+                <button class="swatch active" data-color="#00ffbf" style="background:#00ffbf" title="Cyan"></button>
+                <button class="swatch" data-color="#ffffff" style="background:#ffffff" title="White"></button>
+                <button class="swatch" data-color="#ff4655" style="background:#ff4655" title="Crimson"></button>
+                <button class="swatch" data-color="#ffb038" style="background:#ffb038" title="Amber"></button>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <label>Threat Level</label>
+              <div class="pill-row" id="difficulty-pills">
+                <button class="pill" data-diff="casual">RECRUIT</button>
+                <button class="pill active" data-diff="tactical">TACTICAL</button>
+                <button class="pill" data-diff="radiant">RADIANT</button>
+              </div>
+            </div>
+
+            <div class="tactical-tip">
+              <b>TACTICAL NOTE:</b> Counter-strafe or <b>Crouch (Ctrl)</b> for pinpoint first-shot accuracy. Deploy <b>E (Smoke)</b> to cut sightlines through the Blast Bulkhead and <b>Q (Flash)</b> to blind defenders.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Match End Summary Modal -->
+    <div id="match-end-overlay" class="hidden">
+      <div class="match-end-card">
+        <div id="me-subtitle">OPERATION CONCLUDED</div>
+        <h2 id="me-title">VICTORY</h2>
+        <div class="me-stats-grid">
+          <div class="me-stat"><span id="me-kills">0</span><label>KILLS</label></div>
+          <div class="me-stat"><span id="me-hs">0%</span><label>HEADSHOT %</label></div>
+          <div class="me-stat"><span id="me-deaths">0</span><label>DEATHS</label></div>
+          <div class="me-stat"><span id="me-score">0</span><label>SCORE</label></div>
+        </div>
+        <div class="action-row" style="justify-content:center; margin-top:22px;">
+          <button id="btn-play-again" class="btn-primary">DEPLOY AGAIN</button>
+          <button id="btn-back-menu" class="btn-secondary">MAIN MENU</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
