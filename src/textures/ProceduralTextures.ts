@@ -1054,7 +1054,8 @@ function buildHelmetShellPBR(): PBRTextureSet {
 }
 
 /**
- * Natural shaded operator skin PBR texture (warm undertones, subtle forearm tone & soft pores)
+ * Realistic natural human skin PBR texture (soft matte warm-rose/tan undertones,
+ * subtle longitudinal forearm shading & fine micro-pore bump — zero plastic sheen!)
  */
 function buildOperatorSkinPBR(): PBRTextureSet {
   const size = 256;
@@ -1063,32 +1064,42 @@ function buildOperatorSkinPBR(): PBRTextureSet {
   const [cBump, bump] = makeCanvas(size, size);
   const rand = mulberry32(6619);
 
-  const grad = col.createLinearGradient(0, 0, size, size);
-  grad.addColorStop(0, '#dba484');
-  grad.addColorStop(0.5, '#e2ad8e');
-  grad.addColorStop(1, '#c98e6e');
+  // Subtle anatomical cylindrical shading across circumference (warm sunlit top, cooler shadow underside)
+  const grad = col.createLinearGradient(0, 0, size, 0);
+  grad.addColorStop(0.0, '#c68f78');
+  grad.addColorStop(0.28, '#dda990');
+  grad.addColorStop(0.55, '#e5b79f');
+  grad.addColorStop(0.82, '#cb937c');
+  grad.addColorStop(1.0, '#c68f78');
   col.fillStyle = grad;
   col.fillRect(0, 0, size, size);
 
-  rough.fillStyle = '#aeaeae';
+  rough.fillStyle = '#d8d8d8';
   rough.fillRect(0, 0, size, size);
   bump.fillStyle = '#808080';
   bump.fillRect(0, 0, size, size);
 
-  for (let i = 0; i < 42; i++) {
+  // Natural warm/cool subcutaneous capillary micro-variations
+  for (let i = 0; i < 65; i++) {
     const x = rand() * size;
     const y = rand() * size;
-    const r = 12 + rand() * 34;
-    col.fillStyle = i % 2 === 0 ? 'rgba(182, 108, 82, 0.07)' : 'rgba(255, 224, 202, 0.07)';
+    const r = 10 + rand() * 32;
+    col.fillStyle =
+      i % 3 === 0
+        ? 'rgba(176, 98, 86, 0.065)'
+        : i % 3 === 1
+        ? 'rgba(255, 228, 212, 0.055)'
+        : 'rgba(120, 96, 88, 0.045)';
     col.beginPath();
     col.arc(x, y, r, 0, Math.PI * 2);
     col.fill();
   }
 
-  for (let i = 0; i < 420; i++) {
+  // Very subtle skin pore micro-grain
+  for (let i = 0; i < 650; i++) {
     const x = rand() * size;
     const y = rand() * size;
-    bump.fillStyle = rand() > 0.5 ? 'rgba(142,142,142,0.18)' : 'rgba(116,116,116,0.18)';
+    bump.fillStyle = rand() > 0.5 ? 'rgba(146,146,146,0.16)' : 'rgba(112,112,112,0.16)';
     bump.fillRect(x, y, 2, 2);
   }
 
