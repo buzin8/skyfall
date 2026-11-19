@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { WeaponDef } from '../types';
 import { SoundEngine } from '../audio/SoundEngine';
 import { TextureLibrary } from '../textures/ProceduralTextures';
@@ -217,10 +218,36 @@ export class WeaponSystem {
 
   private lightPool: THREE.PointLight[] = [];
 
-  // Shared bare operator forearm & black fingerless tactical combat glove materials across all viewmodels
-  private matSkin: THREE.MeshStandardMaterial;
-  private matGlove: THREE.MeshStandardMaterial;
-  private matGlovePad: THREE.MeshStandardMaterial;
+  // External Blender-rigged FPS arms loaded via GLTFLoader (/models/fps_arms.glb)
+  private fpsArmsPivot = new THREE.Group();
+  private armsMixer: THREE.AnimationMixer | null = null;
+  private armsActions: Record<'idle' | 'shoot' | 'reload', THREE.AnimationAction | null> = {
+    idle: null,
+    shoot: null,
+    reload: null,
+  };
+  private armsSlotOffsets: Record<'vandal' | 'ghost' | 'knife', { pos: THREE.Vector3; rot: THREE.Euler; scale: number }> = {
+    vandal: { pos: new THREE.Vector3(), rot: new THREE.Euler(), scale: 1 },
+    ghost: { pos: new THREE.Vector3(), rot: new THREE.Euler(), scale: 1 },
+    knife: { pos: new THREE.Vector3(), rot: new THREE.Euler(), scale: 1 },
+  };
+  private upperArmL: THREE.Object3D | null = null;
+  private upperArmR: THREE.Object3D | null = null;
+  private upperArmLBasePos = new THREE.Vector3();
+  private upperArmRBasePos = new THREE.Vector3();
+  private armBoneAdjust: Record<
+    'vandal' | 'ghost' | 'knife',
+    {
+      lDelta: THREE.Vector3;
+      rDelta: THREE.Vector3;
+      lScale: number;
+    }
+  > = {
+    vandal: { lDelta: new THREE.Vector3(), rDelta: new THREE.Vector3(), lScale: 1 },
+    ghost: { lDelta: new THREE.Vector3(), rDelta: new THREE.Vector3(), lScale: 1 },
+    knife: { lDelta: new THREE.Vector3(), rDelta: new THREE.Vector3(), lScale: 0.0001 },
+  };
+  private armsLoaded = false;
 
   constructor(
     private scene: THREE.Scene,
@@ -230,44 +257,6 @@ export class WeaponSystem {
   ) {
     this.camera.add(this.viewmodelRoot);
     this.scene.add(this.fxGroup);
-
-    // Natural matte human skin (warm-neutral complexion, zero plastic specular glare!)
-    this.matSkin = new THREE.MeshStandardMaterial({
-      color: 0xe4b8a2,
-      map: textures?.operatorSkin.map ?? null,
-      roughnessMap: textures?.operatorSkin.roughnessMap ?? null,
-      bumpMap: textures?.operatorSkin.bumpMap ?? null,
-      bumpScale: 0.007,
-      emissive: new THREE.Color(0x362019),
-      emissiveIntensity: 0.16,
-      roughness: 0.86,
-      metalness: 0.0,
-      envMapIntensity: 0.28,
-    });
-
-    // Matte pebbled black leather/neoprene tactical fingerless combat gloves
-    this.matGlove = new THREE.MeshStandardMaterial({
-      color: 0x2d323b,
-      map: textures?.tacticalGlove.map ?? null,
-      roughnessMap: textures?.tacticalGlove.roughnessMap ?? null,
-      bumpMap: textures?.tacticalGlove.bumpMap ?? null,
-      bumpScale: 0.02,
-      emissive: new THREE.Color(0x0d0f14),
-      emissiveIntensity: 0.14,
-      roughness: 0.76,
-      metalness: 0.08,
-      envMapIntensity: 0.65,
-    });
-
-    this.matGlovePad = new THREE.MeshStandardMaterial({
-      color: 0x191d24,
-      map: textures?.tacticalGlove.map ?? null,
-      bumpMap: textures?.tacticalGlove.bumpMap ?? null,
-      bumpScale: 0.016,
-      roughness: 0.62,
-      metalness: 0.18,
-      envMapIntensity: 0.8,
-    });
 
     // Single shared dynamic combat light (avoids multi-light PBR shader bloat for rock-solid 60 FPS)
     const combatLight = new THREE.PointLight(0xff9c38, 0, 14, 1.5);
@@ -284,6 +273,7 @@ export class WeaponSystem {
     Object.values(this.models).forEach((m) => this.viewmodelRoot.add(m));
     this.buildMuzzleFlash();
     this.selectSlot(0, true);
+    this.loadFpsArmsModel();
   }
 
   public get currentWeapon(): WeaponDef {
@@ -337,6 +327,291 @@ export class WeaponSystem {
     }
     this.muzzleFlashGroup.position.copy(this.muzzlePoint.position);
     this.muzzleLight.position.copy(this.muzzlePoint.position);
+    this.attachArmsToSlot(id);
+  }
+
+  private loadFpsArmsModel(): void {
+    const loader = new GLTFLoader();
+    loader.load(
+      '/models/fps_arms.glb',
+      (gltf) => {
+        const armsScene = gltf.scene;
+        armsScene.rotation.set(0, Math.PI / 2, 0);
+
+        // Hide bundled weapon mesh inside the GLB so only the real Blender skeletal arms/hands render!
+        armsScene.traverse((obj) => {
+          const mesh = obj as THREE.Mesh;
+          if (mesh.isMesh) {
+            const lower = (mesh.name || '').toLowerCase();
+            if (lower.includes('akm') || lower.includes('gun') || lower.includes('rifle') || lower.includes('weapon')) {
+              mesh.visible = false;
+              return;
+            }
+            mesh.frustumCulled = false;
+            mesh.castShadow = false;
+            mesh.receiveShadow = false;
+
+            const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+            mats.forEach((mat) => {
+              const std = mat as THREE.MeshStandardMaterial;
+              if (!std || !std.isMeshStandardMaterial) return;
+              const mName = (std.name || '').toLowerCase();
+              std.envMapIntensity = 0.75;
+              if (mName.includes('shirt') || mName.includes('sleeve')) {
+                std.color.setHex(0x28303b);
+                std.roughness = 0.88;
+                std.metalness = 0.04;
+                std.emissive.setHex(0x0b0f16);
+                std.emissiveIntensity = 0.2;
+              } else if (mName.includes('glove')) {
+                std.color.setHex(0x1b1f26);
+                std.roughness = 0.72;
+                std.metalness = 0.14;
+                std.emissive.setHex(0x090b0f);
+                std.emissiveIntensity = 0.18;
+              } else if (mName.includes('skin')) {
+                std.color.setHex(0xdca88e);
+                std.roughness = 0.84;
+                std.metalness = 0.0;
+                std.emissive.setHex(0x362018);
+                std.emissiveIntensity = 0.18;
+              }
+            });
+          }
+        });
+
+        this.fpsArmsPivot.clear();
+        this.fpsArmsPivot.add(armsScene);
+
+        // Initialize skeletal AnimationMixer (Idle / Shoot / Reload) if clips exist in the GLB
+        if (gltf.animations && gltf.animations.length > 0) {
+          this.armsMixer = new THREE.AnimationMixer(armsScene);
+          for (const clip of gltf.animations) {
+            const name = clip.name.toLowerCase();
+            const action = this.armsMixer.clipAction(clip);
+            if (name.includes('idle')) {
+              this.armsActions.idle = action;
+            } else if (name.includes('shoot') || name.includes('fire')) {
+              action.setLoop(THREE.LoopOnce, 1);
+              action.clampWhenFinished = false;
+              this.armsActions.shoot = action;
+            } else if (name.includes('reload')) {
+              action.setLoop(THREE.LoopOnce, 1);
+              action.clampWhenFinished = true;
+              this.armsActions.reload = action;
+            }
+          }
+          if (!this.armsActions.idle) {
+            this.armsActions.idle = this.armsMixer.clipAction(gltf.animations[0]);
+          }
+          this.armsActions.idle.play();
+          this.armsMixer.update(0);
+        }
+
+        // Auto-calibrate scale, yaw & grip alignment directly from the rig's Trigger / Magazine / Finger bones!
+        this.fpsArmsPivot.position.set(0, 0, 0);
+        this.fpsArmsPivot.rotation.set(0, 0, 0);
+        this.fpsArmsPivot.scale.setScalar(1);
+        this.fpsArmsPivot.updateMatrixWorld(true);
+
+        // Helper immune to Three.js GLTFLoader dot-stripping (e.g. "UpperArm.R.001" -> "UpperArmR001")
+        const findNode = (pattern: RegExp): THREE.Object3D | null => {
+          let found: THREE.Object3D | null = null;
+          armsScene.traverse((obj) => {
+            if (!found && obj.name && pattern.test(obj.name.replace(/[._]/g, ''))) {
+              found = obj;
+            }
+          });
+          return found;
+        };
+
+        const triggerBone = findNode(/^trigger$/i);
+        const magBone = findNode(/^magazine$/i);
+        this.upperArmL = findNode(/^upperarml$/i);
+        this.upperArmR = findNode(/^upperarmr0*1?$/i);
+        if (this.upperArmL) this.upperArmLBasePos.copy(this.upperArmL.position);
+        if (this.upperArmR) this.upperArmRBasePos.copy(this.upperArmR.position);
+
+        const leftGripBone =
+          findNode(/^doublefingersl$/i) ??
+          findNode(/^doublefingersbeginning$/i) ??
+          findNode(/^handl$/i);
+        const rightFingerBone =
+          findNode(/^doublefingersr0*1?$/i) ??
+          findNode(/^handr0*1?$/i);
+        const rightGripBone = triggerBone ?? rightFingerBone;
+
+        if (leftGripBone && rightGripBone) {
+          const rawL = new THREE.Vector3();
+          const rawR = new THREE.Vector3();
+          leftGripBone.getWorldPosition(rawL);
+          rightGripBone.getWorldPosition(rawR);
+
+          // Auto-align horizontal forward vector (Trigger -> Magazine) strictly along -Z
+          const fwdRef = magBone ? new THREE.Vector3() : rawL.clone();
+          if (magBone) magBone.getWorldPosition(fwdRef);
+          const dx = fwdRef.x - rawR.x;
+          const dz = fwdRef.z - rawR.z;
+          const curYaw = Math.atan2(dx, dz);
+          const targetYaw = Math.PI; // -Z forward in camera space
+          armsScene.rotation.y += targetYaw - curYaw;
+          this.fpsArmsPivot.updateMatrixWorld(true);
+
+          leftGripBone.getWorldPosition(rawL);
+          rightGripBone.getWorldPosition(rawR);
+          const rawRFinger = new THREE.Vector3();
+          (rightFingerBone ?? rightGripBone).getWorldPosition(rawRFinger);
+          const rawSpan = rawL.distanceTo(rawR);
+
+          // Helper: converts a desired offset in weapon space into Armature-local bone translation delta
+          const toArmatureLocalDelta = (bone: THREE.Object3D | null, weaponDelta: THREE.Vector3, pivotScale: number) => {
+            if (!bone?.parent) return new THREE.Vector3();
+            // Apply pivotScale temporarily to read exact parent matrix
+            this.fpsArmsPivot.scale.setScalar(pivotScale);
+            this.fpsArmsPivot.updateMatrixWorld(true);
+            const invParent = bone.parent.matrixWorld.clone().invert();
+            const e = invParent.elements;
+            // Apply linear 3x3 part of invParent (includes both inverse rotation AND inverse scale!)
+            const localDelta = new THREE.Vector3(
+              weaponDelta.x * e[0] + weaponDelta.y * e[4] + weaponDelta.z * e[8],
+              weaponDelta.x * e[1] + weaponDelta.y * e[5] + weaponDelta.z * e[9],
+              weaponDelta.x * e[2] + weaponDelta.y * e[6] + weaponDelta.z * e[10]
+            );
+            this.fpsArmsPivot.scale.setScalar(1);
+            this.fpsArmsPivot.updateMatrixWorld(true);
+            return localDelta;
+          };
+
+          // 1. VANDAL RIFLE: Keep left hand locked cleanly onto the front handguard,
+          //    and shift ONLY the right arm cleanly down onto the pistol grip BELOW the tan receiver & stock!
+          const targetR = new THREE.Vector3(0.0, -0.048, 0.072);
+          const targetL = new THREE.Vector3(-0.015, -0.012, -0.31);
+          const rifleScale = rawSpan > 0.001 ? (targetL.distanceTo(targetR) / rawSpan) * 1.06 : 0.08;
+
+          const scaledR = rawR.clone().multiplyScalar(rifleScale);
+          const rifleOffset = targetR.clone().sub(scaledR);
+          rifleOffset.y += 0.026; // Keeps left hand cradling the handguard cleanly above the HUD
+
+          this.armsSlotOffsets.vandal = {
+            pos: rifleOffset,
+            rot: new THREE.Euler(0, 0, 0),
+            scale: rifleScale,
+          };
+          // Drop right hand cleanly out of the tan stock/receiver down onto the pistol grip!
+          this.armBoneAdjust.vandal = {
+            lDelta: new THREE.Vector3(),
+            rDelta: toArmatureLocalDelta(this.upperArmR, new THREE.Vector3(0.016, -0.078, 0.022), rifleScale),
+            lScale: 1,
+          };
+
+          // 2. GHOST SUPPRESSED PISTOL: Anchor real right gloved hand directly onto the ergonomic pistol grip,
+          //    and pull the left gloved support hand back & under the trigger guard/grip (NOT holding the silencer!)
+          const ghostScale = rifleScale * 0.9;
+          const ghostRFinger = rawRFinger.clone().multiplyScalar(ghostScale);
+          const ghostAnchorR = new THREE.Vector3(0.008, -0.068, 0.062);
+          const ghostOffset = ghostAnchorR.clone().sub(ghostRFinger);
+          this.armsSlotOffsets.ghost = {
+            pos: ghostOffset,
+            rot: new THREE.Euler(0, 0, 0),
+            scale: ghostScale,
+          };
+          const ghostCurrentL = rawL.clone().multiplyScalar(ghostScale).add(ghostOffset);
+          const ghostDesiredL = new THREE.Vector3(-0.016, -0.072, 0.028);
+          this.armBoneAdjust.ghost = {
+            lDelta: toArmatureLocalDelta(this.upperArmL, ghostDesiredL.sub(ghostCurrentL), ghostScale),
+            rDelta: new THREE.Vector3(),
+            lScale: 1,
+          };
+
+          // 3. TACTICAL TANTO KNIFE: Anchor real right gloved hand firmly around the G10 knife handle
+          //    and collapse unused left arm cleanly (one-handed combat grip — zero grabbing the razor blade!)
+          const knifeScale = rifleScale * 0.95;
+          const knifeRFinger = rawRFinger.clone().multiplyScalar(knifeScale);
+          const knifeAnchorR = new THREE.Vector3(0.004, -0.008, 0.056);
+          this.armsSlotOffsets.knife = {
+            pos: knifeAnchorR.clone().sub(knifeRFinger),
+            rot: new THREE.Euler(0, 0, 0),
+            scale: knifeScale,
+          };
+          this.armBoneAdjust.knife = {
+            lDelta: new THREE.Vector3(),
+            rDelta: new THREE.Vector3(),
+            lScale: 0.0001,
+          };
+        } else {
+          // Generic fallback for any custom drop-in public/models/fps_arms.glb
+          this.armsSlotOffsets.vandal = {
+            pos: new THREE.Vector3(0, -0.16, -0.08),
+            rot: new THREE.Euler(0, 0, 0),
+            scale: 0.08,
+          };
+          this.armsSlotOffsets.ghost = {
+            pos: new THREE.Vector3(0, -0.14, 0.02),
+            rot: new THREE.Euler(0, 0, 0),
+            scale: 0.07,
+          };
+          this.armsSlotOffsets.knife = {
+            pos: new THREE.Vector3(0, -0.12, 0.04),
+            rot: new THREE.Euler(0, 0, 0),
+            scale: 0.07,
+          };
+        }
+
+        this.armsLoaded = true;
+        this.attachArmsToSlot(this.slotOrder[this.currentSlot]);
+      },
+      undefined,
+      (err) => {
+        console.warn('[WeaponSystem] Could not load /models/fps_arms.glb; using clean weapon-only viewmodel.', err);
+      }
+    );
+  }
+
+  private attachArmsToSlot(id: 'vandal' | 'ghost' | 'knife'): void {
+    if (!this.armsLoaded) return;
+    const cfg = this.armsSlotOffsets[id];
+    this.models[id].add(this.fpsArmsPivot);
+    this.fpsArmsPivot.visible = true;
+    this.fpsArmsPivot.position.copy(cfg.pos);
+    this.fpsArmsPivot.rotation.copy(cfg.rot);
+    this.fpsArmsPivot.scale.setScalar(cfg.scale);
+    this.playArmsAnim('idle');
+    this.applyArmBonePose(id);
+  }
+
+  private applyArmBonePose(id: 'vandal' | 'ghost' | 'knife'): void {
+    if (!this.armsLoaded) return;
+    const adj = this.armBoneAdjust[id];
+    if (this.upperArmL) {
+      this.upperArmL.scale.setScalar(adj.lScale);
+      if (!this.isReloading) {
+        this.upperArmL.position.copy(this.upperArmLBasePos).add(adj.lDelta);
+      }
+    }
+    if (this.upperArmR) {
+      this.upperArmR.scale.setScalar(1);
+      this.upperArmR.position.copy(this.upperArmRBasePos).add(adj.rDelta);
+    }
+  }
+
+  private playArmsAnim(kind: 'idle' | 'shoot' | 'reload'): void {
+    if (!this.armsMixer) return;
+    const target = this.armsActions[kind] ?? this.armsActions.idle;
+    if (!target) return;
+    if (kind === 'idle') {
+      this.armsActions.reload?.stop();
+      this.armsActions.shoot?.stop();
+      target.reset().play();
+    } else if (kind === 'shoot') {
+      target.stop();
+      target.timeScale = 1.6;
+      target.reset().play();
+    } else if (kind === 'reload') {
+      this.armsActions.shoot?.stop();
+      const clipDur = target.getClip().duration || 2.1;
+      target.timeScale = clipDur / Math.max(0.5, this.currentWeapon.reloadTime);
+      target.reset().play();
+    }
   }
 
   public startReload(): void {
@@ -351,6 +626,7 @@ export class WeaponSystem {
     this.reloadMidPlayed = false;
     this.isAds = false;
     this.sound.playReload('start');
+    this.playArmsAnim('reload');
   }
 
   public addSway(dx: number, dy: number): void {
@@ -436,6 +712,7 @@ export class WeaponSystem {
 
     this.triggerMuzzleFlash();
     this.spawnBrassShell(muzzleWorld, right, up, forward);
+    this.playArmsAnim('shoot');
 
     if (w.id === 'vandal') this.sound.playVandalShot(1.0);
     else this.sound.playGhostShot();
@@ -705,7 +982,13 @@ export class WeaponSystem {
         this.isReloading = false;
         this.reloadProgress = 0;
         this.sound.playReload('done');
+        this.playArmsAnim('idle');
       }
+    }
+
+    if (this.armsMixer) {
+      this.armsMixer.update(dt);
+      this.applyArmBonePose(w.id);
     }
 
     if (this.sprayResetTimer > 0) {
@@ -998,39 +1281,7 @@ export class WeaponSystem {
     });
     const cyanLed = new THREE.MeshBasicMaterial({ color: 0x56f6ff });
 
-    const UP = new THREE.Vector3(0, 1, 0);
-    const addTaperedSegment = (
-      from: THREE.Vector3,
-      to: THREE.Vector3,
-      rFrom: number,
-      rTo: number,
-      mat: THREE.Material,
-      radialSegs = 12
-    ) => {
-      const dir = new THREE.Vector3().subVectors(to, from);
-      const len = dir.length();
-      const mesh = new THREE.Mesh(new THREE.CylinderGeometry(rTo, rFrom, len, radialSegs), mat);
-      mesh.position.copy(from).add(to).multiplyScalar(0.5);
-      mesh.quaternion.setFromUnitVectors(UP, dir.normalize());
-      root.add(mesh);
-      return mesh;
-    };
-
-    const makeRoundedRectShape = (w: number, h: number, r: number): THREE.Shape => {
-      const hw = w / 2;
-      const hh = h / 2;
-      const s = new THREE.Shape();
-      s.moveTo(-hw + r, -hh);
-      s.lineTo(hw - r, -hh);
-      s.quadraticCurveTo(hw, -hh, hw, -hh + r);
-      s.lineTo(hw, hh - r);
-      s.quadraticCurveTo(hw, hh, hw - r, hh);
-      s.lineTo(-hw + r, hh);
-      s.quadraticCurveTo(-hw, hh, -hw, hh - r);
-      s.lineTo(-hw, -hh + r);
-      s.quadraticCurveTo(-hw, -hh, -hw + r, -hh);
-      return s;
-    };
+    const makeRoundedRectShape = (w: number, h: number, r: number): THREE.Shape => this.makeRoundedRect(w, h, r);
 
     // ===== SCULPTED STOCK WITH BEVELED TAN CHEEK RISER =====
     const stockFrame = new THREE.Mesh(new THREE.BoxGeometry(0.064, 0.088, 0.42), matteBlack);
@@ -1279,113 +1530,7 @@ export class WeaponSystem {
     grip.rotation.x = -0.26;
     root.add(grip);
 
-    // ===== CONTINUOUS SCULPTED LOFTED HANDS (Zero cylinder seams, zero puffy spheres, true cupped palm!) =====
-    // 1. Bare muscular left forearm sweeping cleanly up at a natural diagonal from bottom-left into the wrist cuff
-    const leftForearm = this.buildLoftedSurface(
-      [
-        { pos: new THREE.Vector3(-0.42, -0.37, -0.05), rx: 0.062, ry: 0.052, twist: 0.18 },
-        { pos: new THREE.Vector3(-0.30, -0.27, -0.145), rx: 0.058, ry: 0.047, twist: 0.14 },
-        { pos: new THREE.Vector3(-0.195, -0.175, -0.225), rx: 0.048, ry: 0.038, twist: 0.1 },
-        { pos: new THREE.Vector3(-0.125, -0.112, -0.278), rx: 0.039, ry: 0.031, twist: 0.06 },
-        { pos: new THREE.Vector3(-0.105, -0.095, -0.296), rx: 0.037, ry: 0.03, twist: 0.06 },
-      ],
-      this.matSkin,
-      { steps: 18, radialSegs: 20 }
-    );
-    root.add(leftForearm);
-
-    // 2. Tailored matte-black tactical fingerless glove (cuff -> contoured heel -> cupped palm UNDER handguard!)
-    const leftGlove = this.buildLoftedSurface(
-      [
-        { pos: new THREE.Vector3(-0.126, -0.113, -0.277), rx: 0.0435, ry: 0.035, twist: 0.06, squircle: 0.05 },
-        { pos: new THREE.Vector3(-0.114, -0.102, -0.288), rx: 0.0415, ry: 0.033, twist: 0.1, squircle: 0.08 },
-        { pos: new THREE.Vector3(-0.084, -0.076, -0.312), rx: 0.047, ry: 0.034, twist: 0.28, squircle: 0.22 },
-        { pos: new THREE.Vector3(-0.044, -0.052, -0.34), rx: 0.052, ry: 0.03, twist: 0.52, squircle: 0.35 },
-        { pos: new THREE.Vector3(-0.002, -0.044, -0.356), rx: 0.046, ry: 0.024, twist: 0.85, squircle: 0.3 },
-        { pos: new THREE.Vector3(0.032, -0.038, -0.362), rx: 0.034, ry: 0.018, twist: 1.05, squircle: 0.2 },
-      ],
-      this.matGlove,
-      { steps: 20, radialSegs: 22, capEnd: true }
-    );
-    root.add(leftGlove);
-
-    // Subtle dark leather cuff hem & wrist closure seam hugging the forearm edge cleanly
-    const cuffHem = this.buildLoftedSurface(
-      [
-        { pos: new THREE.Vector3(-0.131, -0.118, -0.272), rx: 0.045, ry: 0.0365, twist: 0.06 },
-        { pos: new THREE.Vector3(-0.12, -0.108, -0.282), rx: 0.0445, ry: 0.036, twist: 0.08 },
-      ],
-      this.matGlovePad,
-      { steps: 4, radialSegs: 20 }
-    );
-    root.add(cuffHem);
-
-    // 4 smoothly lofted gloved fingers curling tightly up around the far underside of the black handguard
-    for (let f = 0; f < 4; f++) {
-      const fz = -0.315 - f * 0.022;
-      const rScale = f === 3 ? 0.84 : f === 0 ? 0.96 : 1.0;
-      const finger = this.buildLoftedSurface(
-        [
-          { pos: new THREE.Vector3(0.002, -0.052, fz), rx: 0.0115 * rScale, ry: 0.0105 * rScale },
-          { pos: new THREE.Vector3(0.034, -0.045, fz - 0.004), rx: 0.0108 * rScale, ry: 0.0098 * rScale },
-          { pos: new THREE.Vector3(0.046, -0.016, fz - 0.008), rx: 0.0096 * rScale, ry: 0.0088 * rScale },
-          { pos: new THREE.Vector3(0.04, 0.014, fz - 0.01), rx: 0.0082 * rScale, ry: 0.0074 * rScale },
-        ],
-        this.matGlove,
-        { steps: 10, radialSegs: 12, capEnd: true }
-      );
-      root.add(finger);
-    }
-
-    // 3. Continuous sculpted BARE LEFT THUMB rising seamlessly out of the fingerless glove cutout along the left rail!
-    const thumbCutoutHem = this.buildLoftedSurface(
-      [
-        { pos: new THREE.Vector3(-0.072, -0.054, -0.324), rx: 0.026, ry: 0.022, twist: 0.1 },
-        { pos: new THREE.Vector3(-0.064, -0.028, -0.344), rx: 0.0215, ry: 0.018, twist: 0.12 },
-      ],
-      this.matGlovePad,
-      { steps: 5, radialSegs: 16 }
-    );
-    root.add(thumbCutoutHem);
-
-    const leftBareThumb = this.buildLoftedSurface(
-      [
-        { pos: new THREE.Vector3(-0.07, -0.044, -0.33), rx: 0.0235, ry: 0.0195, twist: 0.1 },
-        { pos: new THREE.Vector3(-0.06, -0.014, -0.354), rx: 0.0175, ry: 0.0145, twist: 0.14 },
-        { pos: new THREE.Vector3(-0.051, 0.016, -0.384), rx: 0.0148, ry: 0.012, twist: 0.18 },
-        { pos: new THREE.Vector3(-0.044, 0.042, -0.41), rx: 0.0128, ry: 0.01, twist: 0.2 },
-        { pos: new THREE.Vector3(-0.041, 0.058, -0.425), rx: 0.0102, ry: 0.008, twist: 0.2 },
-      ],
-      this.matSkin,
-      { steps: 14, radialSegs: 16, capEnd: true }
-    );
-    root.add(leftBareThumb);
-
-    // 4. Right trigger hand: continuous sculpted bare right thumb & palm web tucked cleanly beneath rear receiver!
-    const rightThumb = this.buildLoftedSurface(
-      [
-        { pos: new THREE.Vector3(0.012, -0.135, 0.145), rx: 0.028, ry: 0.022 },
-        { pos: new THREE.Vector3(-0.016, -0.105, 0.118), rx: 0.019, ry: 0.0155 },
-        { pos: new THREE.Vector3(-0.038, -0.076, 0.088), rx: 0.0148, ry: 0.0122 },
-        { pos: new THREE.Vector3(-0.046, -0.06, 0.064), rx: 0.0115, ry: 0.0095 },
-      ],
-      this.matSkin,
-      { steps: 12, radialSegs: 14, capEnd: true }
-    );
-    root.add(rightThumb);
-
-    const rightHandGrip = this.buildLoftedSurface(
-      [
-        { pos: new THREE.Vector3(0.01, -0.125, 0.125), rx: 0.038, ry: 0.032, squircle: 0.2 },
-        { pos: new THREE.Vector3(0.028, -0.148, 0.168), rx: 0.042, ry: 0.034, squircle: 0.15 },
-        { pos: new THREE.Vector3(0.068, -0.195, 0.265), rx: 0.046, ry: 0.036 },
-        { pos: new THREE.Vector3(0.115, -0.255, 0.375), rx: 0.054, ry: 0.044 },
-      ],
-      this.matSkin,
-      { steps: 12, radialSegs: 16 }
-    );
-    root.add(rightHandGrip);
-
+    // Hands & arms are loaded via GLTFLoader from /models/fps_arms.glb (no procedural hands!)
     return root;
   }
 
@@ -1403,139 +1548,6 @@ export class WeaponSystem {
     s.lineTo(-hw, -hh + r);
     s.quadraticCurveTo(-hw, -hh, -hw + r, -hh);
     return s;
-  }
-
-  /**
-   * Continuous rotation-minimizing (parallel transport) lofted organic surface generator.
-   * Produces silky-smooth sculpted forearms, fitted leather gloves, palms, curved fingers, and thumbs
-   * with zero cylinder seams, zero ball joints, and natural dome-capped tips.
-   */
-  private buildLoftedSurface(
-    stations: Array<{ pos: THREE.Vector3; rx: number; ry: number; twist?: number; squircle?: number }>,
-    mat: THREE.Material,
-    opts: { steps?: number; radialSegs?: number; capEnd?: boolean } = {}
-  ): THREE.Mesh {
-    const steps = opts.steps ?? 16;
-    const radialSegs = opts.radialSegs ?? 18;
-    const capEnd = opts.capEnd ?? false;
-
-    const curve = new THREE.CatmullRomCurve3(stations.map((s) => s.pos));
-    const nSt = stations.length - 1;
-
-    const sampleScalar = (
-      t: number,
-      getter: (s: { rx: number; ry: number; twist?: number; squircle?: number }) => number
-    ) => {
-      const scaled = t * nSt;
-      const idx = Math.min(nSt - 1, Math.floor(scaled));
-      const f = scaled - idx;
-      const u = f * f * (3 - 2 * f);
-      return getter(stations[idx]) * (1 - u) + getter(stations[idx + 1]) * u;
-    };
-
-    const rings: Array<{
-      center: THREE.Vector3;
-      rAxis: THREE.Vector3;
-      uAxis: THREE.Vector3;
-      rx: number;
-      ry: number;
-      squircle: number;
-      v: number;
-    }> = [];
-
-    const prevT = curve.getTangent(0).normalize();
-    const refUp = Math.abs(prevT.y) > 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
-    const frameR = new THREE.Vector3().crossVectors(prevT, refUp).normalize();
-    const frameU = new THREE.Vector3().crossVectors(frameR, prevT).normalize();
-    const qRot = new THREE.Quaternion();
-
-    for (let i = 0; i <= steps; i++) {
-      const t = i / steps;
-      const center = curve.getPoint(t);
-      const curT = curve.getTangent(t).normalize();
-      if (i > 0) {
-        qRot.setFromUnitVectors(prevT, curT);
-        frameR.applyQuaternion(qRot).normalize();
-        frameU.crossVectors(frameR, curT).normalize();
-        prevT.copy(curT);
-      }
-
-      const twist = sampleScalar(t, (s) => s.twist ?? 0);
-      const ca = Math.cos(twist);
-      const sa = Math.sin(twist);
-      const rAxis = frameR.clone().multiplyScalar(ca).addScaledVector(frameU, sa);
-      const uAxis = frameU.clone().multiplyScalar(ca).addScaledVector(frameR, -sa);
-
-      rings.push({
-        center,
-        rAxis,
-        uAxis,
-        rx: sampleScalar(t, (s) => s.rx),
-        ry: sampleScalar(t, (s) => s.ry),
-        squircle: sampleScalar(t, (s) => s.squircle ?? 0),
-        v: t,
-      });
-    }
-
-    if (capEnd) {
-      const last = rings[rings.length - 1];
-      const endT = curve.getTangent(1).normalize();
-      const domeLen = (last.rx + last.ry) * 0.48;
-      for (const phi of [0.52, 1.02, 1.46]) {
-        const scale = Math.cos(phi);
-        const offset = Math.sin(phi) * domeLen;
-        rings.push({
-          center: last.center.clone().addScaledVector(endT, offset),
-          rAxis: last.rAxis.clone(),
-          uAxis: last.uAxis.clone(),
-          rx: Math.max(0.0006, last.rx * scale),
-          ry: Math.max(0.0006, last.ry * scale),
-          squircle: last.squircle * scale,
-          v: 1 + (phi / 1.57) * 0.08,
-        });
-      }
-    }
-
-    const cols = radialSegs + 1;
-    const positions: number[] = [];
-    const uvs: number[] = [];
-    const indices: number[] = [];
-
-    for (let r = 0; r < rings.length; r++) {
-      const ring = rings[r];
-      const pow = 1 - ring.squircle * 0.36;
-      for (let c = 0; c <= radialSegs; c++) {
-        const theta = (c / radialSegs) * Math.PI * 2;
-        const cx = Math.cos(theta);
-        const cy = Math.sin(theta);
-        const sx = Math.sign(cx) * Math.pow(Math.abs(cx), pow);
-        const sy = Math.sign(cy) * Math.pow(Math.abs(cy), pow);
-
-        const vx = ring.center.x + ring.rAxis.x * (sx * ring.rx) + ring.uAxis.x * (sy * ring.ry);
-        const vy = ring.center.y + ring.rAxis.y * (sx * ring.rx) + ring.uAxis.y * (sy * ring.ry);
-        const vz = ring.center.z + ring.rAxis.z * (sx * ring.rx) + ring.uAxis.z * (sy * ring.ry);
-        positions.push(vx, vy, vz);
-        uvs.push(c / radialSegs, ring.v);
-      }
-    }
-
-    for (let r = 0; r < rings.length - 1; r++) {
-      for (let c = 0; c < radialSegs; c++) {
-        const a = r * cols + c;
-        const b = a + 1;
-        const d = (r + 1) * cols + c;
-        const e = d + 1;
-        indices.push(a, d, b);
-        indices.push(b, d, e);
-      }
-    }
-
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
-    geo.setIndex(indices);
-    geo.computeVertexNormals();
-    return new THREE.Mesh(geo, mat);
   }
 
   /**
@@ -1762,83 +1774,6 @@ private buildGhostModel(): THREE.Group {
     magBase.rotation.x = -0.24;
     root.add(magBase);
 
-    // ===== CLEAN TWO-HANDED TACTICAL PISTOL GRIP =====
-    // Right forearm + gloved firing hand
-    root.add(
-      this.buildLoftedSurface(
-        [
-          { pos: new THREE.Vector3(0.27, -0.35, 0.36), rx: 0.058, ry: 0.047 },
-          { pos: new THREE.Vector3(0.16, -0.225, 0.245), rx: 0.05, ry: 0.04 },
-          { pos: new THREE.Vector3(0.068, -0.125, 0.15), rx: 0.038, ry: 0.03 },
-          { pos: new THREE.Vector3(0.052, -0.106, 0.132), rx: 0.035, ry: 0.028 },
-        ],
-        this.matSkin,
-        { steps: 14, radialSegs: 18 }
-      )
-    );
-    root.add(
-      this.buildLoftedSurface(
-        [
-          { pos: new THREE.Vector3(0.068, -0.125, 0.15), rx: 0.041, ry: 0.033, squircle: 0.1 },
-          { pos: new THREE.Vector3(0.038, -0.082, 0.108), rx: 0.042, ry: 0.031, squircle: 0.22 },
-          { pos: new THREE.Vector3(0.012, -0.058, 0.068), rx: 0.04, ry: 0.026, squircle: 0.28 },
-          { pos: new THREE.Vector3(-0.008, -0.055, 0.042), rx: 0.032, ry: 0.02, squircle: 0.2 },
-        ],
-        this.matGlove,
-        { steps: 14, radialSegs: 18, capEnd: true }
-      )
-    );
-    // Bare right thumb resting high along the left side of the tang
-    root.add(
-      this.buildLoftedSurface(
-        [
-          { pos: new THREE.Vector3(-0.006, -0.032, 0.088), rx: 0.016, ry: 0.013 },
-          { pos: new THREE.Vector3(-0.021, -0.008, 0.056), rx: 0.013, ry: 0.0105 },
-          { pos: new THREE.Vector3(-0.026, 0.006, 0.022), rx: 0.0105, ry: 0.0085 },
-        ],
-        this.matSkin,
-        { steps: 10, radialSegs: 12, capEnd: true }
-      )
-    );
-
-    // Left forearm + support glove cupping the firing hand + forward support thumb
-    root.add(
-      this.buildLoftedSurface(
-        [
-          { pos: new THREE.Vector3(-0.35, -0.36, 0.28), rx: 0.058, ry: 0.047 },
-          { pos: new THREE.Vector3(-0.21, -0.225, 0.185), rx: 0.05, ry: 0.04 },
-          { pos: new THREE.Vector3(-0.095, -0.12, 0.115), rx: 0.038, ry: 0.03 },
-          { pos: new THREE.Vector3(-0.076, -0.102, 0.1), rx: 0.035, ry: 0.028 },
-        ],
-        this.matSkin,
-        { steps: 14, radialSegs: 18 }
-      )
-    );
-    root.add(
-      this.buildLoftedSurface(
-        [
-          { pos: new THREE.Vector3(-0.095, -0.12, 0.115), rx: 0.041, ry: 0.033, squircle: 0.08 },
-          { pos: new THREE.Vector3(-0.055, -0.08, 0.078), rx: 0.043, ry: 0.031, twist: 0.22, squircle: 0.24 },
-          { pos: new THREE.Vector3(-0.022, -0.06, 0.045), rx: 0.042, ry: 0.025, twist: 0.45, squircle: 0.3 },
-          { pos: new THREE.Vector3(0.008, -0.056, 0.028), rx: 0.031, ry: 0.018, twist: 0.72, squircle: 0.2 },
-        ],
-        this.matGlove,
-        { steps: 14, radialSegs: 18, capEnd: true }
-      )
-    );
-    root.add(
-      this.buildLoftedSurface(
-        [
-          { pos: new THREE.Vector3(-0.04, -0.038, 0.052), rx: 0.017, ry: 0.014 },
-          { pos: new THREE.Vector3(-0.031, -0.012, 0.012), rx: 0.0135, ry: 0.011 },
-          { pos: new THREE.Vector3(-0.026, 0.006, -0.038), rx: 0.011, ry: 0.0088 },
-          { pos: new THREE.Vector3(-0.024, 0.01, -0.06), rx: 0.009, ry: 0.0072 },
-        ],
-        this.matSkin,
-        { steps: 12, radialSegs: 14, capEnd: true }
-      )
-    );
-
     return root;
   }
 
@@ -1979,64 +1914,6 @@ private buildGhostModel(): THREE.Group {
     pommelRing.rotation.y = Math.PI / 2;
     pommelRing.position.set(0, -0.002, 0.152);
     root.add(pommelRing);
-
-    // ===== CONTINUOUS LOFTED BARE FOREARM + FITTED MATTE LEATHER FINGERLESS GLOVE GRIPPING KNIFE =====
-    root.add(
-      this.buildLoftedSurface(
-        [
-          { pos: new THREE.Vector3(0.28, -0.35, 0.36), rx: 0.06, ry: 0.049 },
-          { pos: new THREE.Vector3(0.165, -0.205, 0.245), rx: 0.052, ry: 0.042 },
-          { pos: new THREE.Vector3(0.072, -0.092, 0.155), rx: 0.039, ry: 0.031 },
-          { pos: new THREE.Vector3(0.054, -0.07, 0.135), rx: 0.037, ry: 0.029 },
-        ],
-        this.matSkin,
-        { steps: 14, radialSegs: 18 }
-      )
-    );
-    root.add(
-      this.buildLoftedSurface(
-        [
-          { pos: new THREE.Vector3(0.072, -0.092, 0.155), rx: 0.043, ry: 0.034, squircle: 0.08 },
-          { pos: new THREE.Vector3(0.04, -0.046, 0.106), rx: 0.045, ry: 0.033, squircle: 0.22 },
-          { pos: new THREE.Vector3(0.014, -0.008, 0.058), rx: 0.045, ry: 0.029, squircle: 0.3 },
-          { pos: new THREE.Vector3(-0.006, -0.004, 0.018), rx: 0.036, ry: 0.022, squircle: 0.2 },
-        ],
-        this.matGlove,
-        { steps: 14, radialSegs: 18, capEnd: true }
-      )
-    );
-
-    // 4 smoothly lofted gloved fingers wrapped tightly around the left side of the handle
-    for (let f = 0; f < 4; f++) {
-      const fz = 0.01 + f * 0.024;
-      const rScale = f === 3 ? 0.85 : 1.0;
-      root.add(
-        this.buildLoftedSurface(
-          [
-            { pos: new THREE.Vector3(0.018, -0.024, fz), rx: 0.0115 * rScale, ry: 0.0102 * rScale },
-            { pos: new THREE.Vector3(-0.016, -0.026, fz), rx: 0.0108 * rScale, ry: 0.0095 * rScale },
-            { pos: new THREE.Vector3(-0.026, -0.002, fz), rx: 0.0098 * rScale, ry: 0.0086 * rScale },
-            { pos: new THREE.Vector3(-0.014, 0.016, fz), rx: 0.0082 * rScale, ry: 0.0074 * rScale },
-          ],
-          this.matGlove,
-          { steps: 8, radialSegs: 12, capEnd: true }
-        )
-      );
-    }
-
-    // Continuous sculpted bare right thumb braced cleanly on the blade's top thumb-ramp jimping!
-    root.add(
-      this.buildLoftedSurface(
-        [
-          { pos: new THREE.Vector3(-0.016, -0.002, 0.072), rx: 0.019, ry: 0.015 },
-          { pos: new THREE.Vector3(-0.022, 0.024, 0.035), rx: 0.0145, ry: 0.0118 },
-          { pos: new THREE.Vector3(-0.015, 0.042, -0.01), rx: 0.0118, ry: 0.0094 },
-          { pos: new THREE.Vector3(-0.01, 0.046, -0.032), rx: 0.0096, ry: 0.0078 },
-        ],
-        this.matSkin,
-        { steps: 12, radialSegs: 14, capEnd: true }
-      )
-    );
 
     return root;
   }
