@@ -42,7 +42,9 @@ export class TacticalAgent {
   private muzzleFlashTimer = 0;
   private hitFlashTimer = 0;
   private deathAnim = 0;
-  private walkPhase = 0;
+  private walkPhase = Math.random() * Math.PI * 2;
+  private idlePhase = Math.random() * Math.PI * 2;
+  private recoilKick = 0;
   private openingHoldTimer = 0;
   private visionTimer = Math.random() * 0.1;
   private cachedTargetPos: THREE.Vector3 | null = null;
@@ -96,8 +98,21 @@ export class TacticalAgent {
     this.rig.root.visible = true;
     this.rig.root.position.copy(this.pos);
     this.rig.root.rotation.set(0, this.yaw, 0);
+    this.rig.hips.position.set(0, 0.94, 0);
+    this.rig.hips.rotation.set(0, 0, 0);
+    this.rig.torso.rotation.set(0, 0, 0);
+    this.rig.headGroup.rotation.set(0, 0, 0);
+    this.rig.leftLeg.rotation.set(0, 0, 0);
+    this.rig.rightLeg.rotation.set(0, 0, 0);
+    this.rig.leftKnee.rotation.set(0, 0, 0);
+    this.rig.rightKnee.rotation.set(0, 0, 0);
+    this.rig.leftFoot.rotation.set(0, 0, 0);
+    this.rig.rightFoot.rotation.set(0, 0, 0);
+    this.rig.weaponPivot.position.set(-0.14, 0.35, 0.08);
+    this.rig.weaponPivot.rotation.set(0, 0, 0);
     this.rig.blindHalo.visible = false;
     this.rig.muzzleFlash.visible = false;
+    this.recoilKick = 0;
   }
 
   public dispose(scene: THREE.Scene): void {
@@ -161,10 +176,19 @@ export class TacticalAgent {
     }
 
     if (!this.alive) {
-      // Dramatic collapse to ground
-      this.deathAnim = Math.min(1, this.deathAnim + dt * 4.2);
-      this.rig.root.rotation.x = -this.deathAnim * (Math.PI / 2 - 0.08);
-      this.rig.root.position.y = Math.max(0.08, (1 - this.deathAnim) * 0.15);
+      // Articulated knee-buckle collapse instead of rigid plank fall
+      this.deathAnim = Math.min(1, this.deathAnim + dt * 3.8);
+      const t = this.deathAnim;
+      const ease = 1 - (1 - t) * (1 - t);
+      this.rig.hips.position.y = THREE.MathUtils.lerp(0.94, 0.22, ease);
+      this.rig.leftKnee.rotation.x = ease * 1.15;
+      this.rig.rightKnee.rotation.x = ease * 1.35;
+      this.rig.leftLeg.rotation.x = -ease * 0.45;
+      this.rig.rightLeg.rotation.x = ease * 0.25;
+      this.rig.torso.rotation.x = -ease * 1.25;
+      this.rig.torso.rotation.z = ease * 0.35;
+      this.rig.root.rotation.x = -ease * 0.28;
+      this.rig.weaponPivot.rotation.x = ease * 0.7;
       return;
     }
 
@@ -177,7 +201,7 @@ export class TacticalAgent {
       this.rig.blindHalo.visible = true;
       this.rig.blindHalo.rotation.z += dt * 7;
       this.rig.headGroup.rotation.y = Math.sin(performance.now() * 0.015) * 0.45;
-      this.updatePose(dt, 0, true);
+      this.updatePose(dt, 0, 0, true);
       return;
     } else {
       this.rig.blindHalo.visible = false;
@@ -186,7 +210,7 @@ export class TacticalAgent {
 
     if (!roundActive) {
       // Crisp upright two-handed aiming stance during pre-round / showcase
-      this.updatePose(dt, 0, false);
+      this.updatePose(dt, 0, 0, false);
       this.rig.root.position.copy(this.pos);
       this.rig.root.rotation.set(0, this.yaw, 0);
       return;
@@ -238,7 +262,8 @@ export class TacticalAgent {
     const targetAim = this.cachedTargetAim;
     const bestDist = this.cachedTargetDist;
 
-    let moveSpeed = 0;
+    const prevX = this.pos.x;
+    const prevZ = this.pos.z;
     let wantCrouch = false;
 
     if (targetPos && targetAim) {
@@ -260,7 +285,6 @@ export class TacticalAgent {
         const rightZ = -Math.sin(this.yaw) * this.strafeDir;
         const stepSpeed = diffCfg.speed * 0.62;
         this.moveWithCollision(rightX * stepSpeed * dt, rightZ * stepSpeed * dt, colliders);
-        moveSpeed = stepSpeed;
       } else {
         // Sentinel holds ground firmly & crouches slightly
         wantCrouch = bestDist > 10;
@@ -295,6 +319,7 @@ export class TacticalAgent {
             this.rig.muzzleFlash.visible = true;
             this.rig.muzzleFlash.rotation.z = Math.random() * Math.PI;
             this.muzzleFlashTimer = 0.036;
+            this.recoilKick = 1.0;
 
             onFire({
               attackerId: this.id,
@@ -336,7 +361,6 @@ export class TacticalAgent {
             const nz = dz / dist;
             const spd = diffCfg.speed * (this.style === 'duelist' ? 1.12 : 0.94);
             this.moveWithCollision(nx * spd * dt, nz * spd * dt, colliders);
-            moveSpeed = spd;
             const desiredYaw = Math.atan2(nx, nz);
             this.yaw = lerpAngle(this.yaw, desiredYaw, Math.min(1, dt * 8));
           }
@@ -344,7 +368,16 @@ export class TacticalAgent {
       }
     }
 
-    this.updatePose(dt, moveSpeed, wantCrouch);
+    // Measure actual post-collision velocity in agent-local space (prevents running in place & enables real strafe blending!)
+    const invDt = dt > 1e-4 ? 1 / dt : 0;
+    const vx = (this.pos.x - prevX) * invDt;
+    const vz = (this.pos.z - prevZ) * invDt;
+    const sinY = Math.sin(this.yaw);
+    const cosY = Math.cos(this.yaw);
+    const localFwd = vx * sinY + vz * cosY; // Forward (+Z in local space)
+    const localLeft = vx * cosY - vz * sinY; // Left (+X in local space)
+
+    this.updatePose(dt, localFwd, localLeft, wantCrouch);
     this.rig.root.position.copy(this.pos);
     this.rig.root.rotation.set(0, this.yaw, 0);
   }
@@ -416,27 +449,129 @@ export class TacticalAgent {
     }
   }
 
-  private updatePose(dt: number, moveSpeed: number, wantCrouch: boolean): void {
+  private updatePose(dt: number, localFwd: number, localLeft: number, wantCrouch: boolean): void {
     const targetCrouch = wantCrouch ? 1 : 0;
     this.crouchAmount = THREE.MathUtils.lerp(this.crouchAmount, targetCrouch, Math.min(1, dt * 11));
+    this.idlePhase += dt * 2.4;
+    this.recoilKick = Math.max(0, this.recoilKick - dt * 9.5);
 
-    // Smooth tactical combat crouch matching the left agent in the reference screenshot!
-    this.rig.hips.position.y = THREE.MathUtils.lerp(0.94, 0.62, this.crouchAmount);
-    this.rig.torso.rotation.x = THREE.MathUtils.lerp(0.04, 0.24, this.crouchAmount);
-    this.rig.weaponPivot.rotation.x = THREE.MathUtils.lerp(0, -0.22, this.crouchAmount);
+    const smooth = Math.min(1, dt * 14);
+    const breath = Math.sin(this.idlePhase) * 0.011;
+    const moveSpeed = Math.hypot(localFwd, localLeft);
 
     if (moveSpeed > 0.25) {
-      this.walkPhase += dt * moveSpeed * 2.8;
-      const swing = Math.sin(this.walkPhase) * 0.52;
-      this.rig.leftLeg.rotation.x = swing;
-      this.rig.rightLeg.rotation.x = -swing;
-    } else if (this.crouchAmount > 0.35) {
-      // Iconic staggered combat crouch stance (front knee bent, rear heel back)
-      this.rig.leftLeg.rotation.x = -0.68 * this.crouchAmount;
-      this.rig.rightLeg.rotation.x = 0.58 * this.crouchAmount;
+      // Biomechanical 2-bone human running/strafing stride with proper swing-recovery knee fold & upper/lower aim-blending!
+      const speedNorm = Math.min(1.25, moveSpeed / 3.6);
+      this.walkPhase += dt * moveSpeed * 2.55;
+
+      // Turn lower body smoothly toward velocity vector when strafing; torso counter-rotates to keep rifle aimed at target
+      const rawMoveAngle = Math.atan2(localLeft, Math.max(0.25, Math.abs(localFwd)));
+      const lowerYawOffset = THREE.MathUtils.clamp(rawMoveAngle * 0.65, -0.68, 0.68);
+      const strideSign = localFwd < -0.25 ? -1 : 1;
+
+      const phaseL = this.walkPhase * strideSign;
+      const phaseR = phaseL + Math.PI;
+
+      // Three.js +X axis: negative hip = thigh forward (+Z); positive knee = shin bent backward (-Z)
+      const hipL = -Math.sin(phaseL) * 0.6 * speedNorm - this.crouchAmount * 0.35;
+      const hipR = -Math.sin(phaseR) * 0.6 * speedNorm - this.crouchAmount * 0.35;
+
+      // Peak knee fold during swing recovery (phase ≈ 7π/4 -> sin(phase + 2.35) = +1) + soft mid-stance absorption
+      const kneeL =
+        (0.14 + Math.max(0, Math.sin(phaseL + 2.35)) * 0.96 + Math.max(0, -Math.cos(phaseL)) * 0.16) * speedNorm +
+        this.crouchAmount * 0.52;
+      const kneeR =
+        (0.14 + Math.max(0, Math.sin(phaseR + 2.35)) * 0.96 + Math.max(0, -Math.cos(phaseR)) * 0.16) * speedNorm +
+        this.crouchAmount * 0.52;
+
+      // Ankle dorsiflexion at heel strike (negative) & plantarflexion at toe-off (positive)
+      const footL = -Math.sin(phaseL - 0.35) * 0.28 * speedNorm;
+      const footR = -Math.sin(phaseR - 0.35) * 0.28 * speedNorm;
+
+      this.rig.leftLeg.rotation.x = THREE.MathUtils.lerp(this.rig.leftLeg.rotation.x, hipL, smooth);
+      this.rig.rightLeg.rotation.x = THREE.MathUtils.lerp(this.rig.rightLeg.rotation.x, hipR, smooth);
+      this.rig.leftKnee.rotation.x = THREE.MathUtils.lerp(this.rig.leftKnee.rotation.x, kneeL, smooth);
+      this.rig.rightKnee.rotation.x = THREE.MathUtils.lerp(this.rig.rightKnee.rotation.x, kneeR, smooth);
+      this.rig.leftFoot.rotation.x = THREE.MathUtils.lerp(this.rig.leftFoot.rotation.x, footL, smooth);
+      this.rig.rightFoot.rotation.x = THREE.MathUtils.lerp(this.rig.rightFoot.rotation.x, footR, smooth);
+
+      // Vaulting stride bob: highest over vertical planted leg (cos = ±1), lowest at wide stride split (cos = 0)
+      const strideBob = Math.abs(Math.cos(this.walkPhase)) * 0.048 * speedNorm;
+      const baseHipY = THREE.MathUtils.lerp(0.905, 0.68, this.crouchAmount);
+      this.rig.hips.position.y = THREE.MathUtils.lerp(this.rig.hips.position.y, baseHipY + strideBob, smooth);
+
+      // Pelvis twists with striding leg (+X left hip moves forward on negative yaw) + strafe heading blend
+      const strideYaw = -Math.sin(phaseL) * 0.11 * speedNorm;
+      this.rig.hips.rotation.y = THREE.MathUtils.lerp(this.rig.hips.rotation.y, lowerYawOffset + strideYaw, smooth);
+      this.rig.hips.rotation.z = THREE.MathUtils.lerp(
+        this.rig.hips.rotation.z,
+        Math.cos(phaseL) * 0.036 * speedNorm,
+        smooth
+      );
+
+      // Athletic forward combat lean + counter-rotating torso keeping rifle locked forward
+      const leanFwd = 0.13 * speedNorm + this.crouchAmount * 0.15;
+      this.rig.torso.rotation.x = THREE.MathUtils.lerp(this.rig.torso.rotation.x, leanFwd, smooth);
+      this.rig.torso.rotation.y = THREE.MathUtils.lerp(
+        this.rig.torso.rotation.y,
+        -lowerYawOffset - strideYaw * 1.15,
+        smooth
+      );
+      this.rig.torso.rotation.z = THREE.MathUtils.lerp(
+        this.rig.torso.rotation.z,
+        -Math.cos(phaseL) * 0.03 * speedNorm,
+        smooth
+      );
+
+      this.rig.headGroup.rotation.x = -leanFwd * 0.65;
+      this.rig.weaponPivot.rotation.x = -leanFwd * 0.85 - this.recoilKick * 0.12;
+      this.rig.weaponPivot.position.z = 0.08 - this.recoilKick * 0.045;
+      this.rig.weaponPivot.position.y = 0.35 + Math.cos(this.walkPhase * 2) * 0.01 * speedNorm;
+    } else if (this.crouchAmount > 0.25) {
+      // Grounded right-handed tactical kneeling stance (left knee forward +X, right knee tucked low -X)
+      const c = this.crouchAmount;
+      this.rig.hips.position.y = THREE.MathUtils.lerp(this.rig.hips.position.y, THREE.MathUtils.lerp(0.94, 0.64, c) + breath, smooth);
+      this.rig.hips.rotation.y = THREE.MathUtils.lerp(this.rig.hips.rotation.y, -0.2 * c, smooth);
+      this.rig.hips.rotation.z = THREE.MathUtils.lerp(this.rig.hips.rotation.z, 0, smooth);
+
+      this.rig.leftLeg.rotation.x = THREE.MathUtils.lerp(this.rig.leftLeg.rotation.x, -0.92 * c, smooth);
+      this.rig.leftKnee.rotation.x = THREE.MathUtils.lerp(this.rig.leftKnee.rotation.x, 1.12 * c, smooth);
+      this.rig.leftFoot.rotation.x = THREE.MathUtils.lerp(this.rig.leftFoot.rotation.x, -0.2 * c, smooth);
+
+      this.rig.rightLeg.rotation.x = THREE.MathUtils.lerp(this.rig.rightLeg.rotation.x, 0.22 * c, smooth);
+      this.rig.rightKnee.rotation.x = THREE.MathUtils.lerp(this.rig.rightKnee.rotation.x, 1.24 * c, smooth);
+      this.rig.rightFoot.rotation.x = THREE.MathUtils.lerp(this.rig.rightFoot.rotation.x, -0.65 * c, smooth);
+
+      this.rig.torso.rotation.x = THREE.MathUtils.lerp(this.rig.torso.rotation.x, 0.22 * c, smooth);
+      this.rig.torso.rotation.y = THREE.MathUtils.lerp(this.rig.torso.rotation.y, 0.18 * c, smooth);
+      this.rig.torso.rotation.z = THREE.MathUtils.lerp(this.rig.torso.rotation.z, 0, smooth);
+
+      this.rig.headGroup.rotation.x = -0.18 * c;
+      this.rig.weaponPivot.rotation.x = -0.22 * c - this.recoilKick * 0.11;
+      this.rig.weaponPivot.position.z = 0.08 - this.recoilKick * 0.045;
+      this.rig.weaponPivot.position.y = 0.35 + breath;
     } else {
-      this.rig.leftLeg.rotation.x = THREE.MathUtils.lerp(this.rig.leftLeg.rotation.x, 0, dt * 10);
-      this.rig.rightLeg.rotation.x = THREE.MathUtils.lerp(this.rig.rightLeg.rotation.x, 0, dt * 10);
+      // Natural right-handed combat-ready standing stance (left foot slightly forward, unlocked knees, breathing sway!)
+      this.rig.hips.position.y = THREE.MathUtils.lerp(this.rig.hips.position.y, 0.93 + breath, smooth);
+      this.rig.hips.rotation.y = THREE.MathUtils.lerp(this.rig.hips.rotation.y, -0.16, smooth);
+      this.rig.hips.rotation.z = THREE.MathUtils.lerp(this.rig.hips.rotation.z, 0, smooth);
+
+      this.rig.leftLeg.rotation.x = THREE.MathUtils.lerp(this.rig.leftLeg.rotation.x, -0.14, smooth);
+      this.rig.leftKnee.rotation.x = THREE.MathUtils.lerp(this.rig.leftKnee.rotation.x, 0.22, smooth);
+      this.rig.leftFoot.rotation.x = THREE.MathUtils.lerp(this.rig.leftFoot.rotation.x, -0.08, smooth);
+
+      this.rig.rightLeg.rotation.x = THREE.MathUtils.lerp(this.rig.rightLeg.rotation.x, 0.12, smooth);
+      this.rig.rightKnee.rotation.x = THREE.MathUtils.lerp(this.rig.rightKnee.rotation.x, 0.16, smooth);
+      this.rig.rightFoot.rotation.x = THREE.MathUtils.lerp(this.rig.rightFoot.rotation.x, -0.22, smooth);
+
+      this.rig.torso.rotation.x = THREE.MathUtils.lerp(this.rig.torso.rotation.x, 0.06 + breath * 0.6, smooth);
+      this.rig.torso.rotation.y = THREE.MathUtils.lerp(this.rig.torso.rotation.y, 0.14, smooth);
+      this.rig.torso.rotation.z = THREE.MathUtils.lerp(this.rig.torso.rotation.z, 0, smooth);
+
+      this.rig.headGroup.rotation.x = -0.05;
+      this.rig.weaponPivot.rotation.x = -0.05 - this.recoilKick * 0.12;
+      this.rig.weaponPivot.position.z = 0.08 - this.recoilKick * 0.045;
+      this.rig.weaponPivot.position.y = 0.35 + breath * 1.1;
     }
   }
 }
