@@ -521,3 +521,160 @@ export function buildRefinedFaceTexture(team: 'ally' | 'enemy', variant: number)
   tex.needsUpdate = true;
   return tex;
 }
+
+/**
+ * Generates a crisp 512x512 perforated ballistic half-face tactical mesh mask texture (map + bump)
+ * inspired by modern SpecOps protective mesh masks (olive-charcoal tactical mesh, dark breather zone,
+ * stitched top border & contoured cheek/nose shading!).
+ */
+export function buildTacticalMaskTextures(): { map: THREE.CanvasTexture; bump: THREE.CanvasTexture } {
+  const size = 512;
+  const cCol = document.createElement('canvas');
+  cCol.width = size;
+  cCol.height = size;
+  const col = cCol.getContext('2d')!;
+
+  const cBump = document.createElement('canvas');
+  cBump.width = size;
+  cBump.height = size;
+  const bump = cBump.getContext('2d')!;
+
+  // Matte tactical stone-olive / charcoal base with realistic contoured 3D shading (brighter nose/cheeks, darker mouth breather!)
+  const bg = col.createLinearGradient(0, 0, 0, size);
+  bg.addColorStop(0.0, '#6a6f62');
+  bg.addColorStop(0.32, '#5a6054');
+  bg.addColorStop(0.68, '#444940');
+  bg.addColorStop(1.0, '#2c302a');
+  col.fillStyle = bg;
+  col.fillRect(0, 0, size, size);
+
+  bump.fillStyle = '#888888';
+  bump.fillRect(0, 0, size, size);
+
+  // Subtle side-cheek reinforcement panels (slightly smoother fabric on outer edges)
+  const sideShadowL = col.createLinearGradient(0, 0, 125, 0);
+  sideShadowL.addColorStop(0, 'rgba(20, 24, 20, 0.52)');
+  sideShadowL.addColorStop(1, 'rgba(20, 24, 20, 0)');
+  col.fillStyle = sideShadowL;
+  col.fillRect(0, 0, 130, size);
+
+  const sideShadowR = col.createLinearGradient(size, 0, size - 125, 0);
+  sideShadowR.addColorStop(0, 'rgba(20, 24, 20, 0.52)');
+  sideShadowR.addColorStop(1, 'rgba(20, 24, 20, 0)');
+  col.fillStyle = sideShadowR;
+  col.fillRect(size - 130, 0, 130, size);
+
+  // Nose bridge highlight & dramatic recessed mouth/breather shadow (exact tactical silhouette from reference!)
+  const noseHi = col.createRadialGradient(256, 118, 12, 256, 132, 118);
+  noseHi.addColorStop(0, 'rgba(222, 226, 212, 0.34)');
+  noseHi.addColorStop(0.55, 'rgba(180, 186, 172, 0.12)');
+  noseHi.addColorStop(1, 'rgba(180, 186, 172, 0)');
+  col.fillStyle = noseHi;
+  col.fillRect(0, 0, size, size);
+
+  const mouthShadow = col.createRadialGradient(256, 295, 16, 256, 295, 112);
+  mouthShadow.addColorStop(0, 'rgba(12, 15, 13, 0.72)');
+  mouthShadow.addColorStop(0.55, 'rgba(18, 22, 19, 0.38)');
+  mouthShadow.addColorStop(1, 'rgba(18, 22, 19, 0)');
+  col.fillStyle = mouthShadow;
+  col.fillRect(0, 0, size, size);
+
+  // Micro-perforated hexagonal/staggered steel tactical mesh pattern across mask!
+  const stepX = 10;
+  const stepY = 9;
+  for (let row = 0; row * stepY < size; row++) {
+    const py = row * stepY + 4;
+    const xOff = (row % 2) * (stepX * 0.5);
+    for (let cx = xOff; cx < size; cx += stepX) {
+      // Dark ventilation pore
+      col.fillStyle = 'rgba(16, 19, 17, 0.58)';
+      col.beginPath();
+      col.arc(cx, py, 2.7, 0, Math.PI * 2);
+      col.fill();
+
+      // Tiny metallic rim catchlight above each pore
+      col.fillStyle = 'rgba(218, 224, 210, 0.22)';
+      col.fillRect(cx - 1.5, py - 3.6, 3.0, 1.3);
+
+      // Deep pore recess in bump map
+      bump.fillStyle = '#1e1e1e';
+      bump.beginPath();
+      bump.arc(cx, py, 2.9, 0, Math.PI * 2);
+      bump.fill();
+    }
+  }
+
+  // Heavy matte stitched neoprene trim along top V-border (where mask meets ballistic glasses!)
+  col.fillStyle = '#252924';
+  col.fillRect(0, 0, size, 26);
+  col.strokeStyle = 'rgba(175, 184, 168, 0.32)';
+  col.lineWidth = 2.5;
+  col.setLineDash([8, 6]);
+  col.beginPath();
+  col.moveTo(0, 18);
+  col.lineTo(size, 18);
+  col.stroke();
+  col.setLineDash([]);
+
+  const map = new THREE.CanvasTexture(cCol);
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.minFilter = THREE.LinearMipmapLinearFilter;
+  map.magFilter = THREE.LinearFilter;
+  map.anisotropy = 16;
+  map.needsUpdate = true;
+
+  const bumpTex = new THREE.CanvasTexture(cBump);
+  bumpTex.colorSpace = THREE.NoColorSpace;
+  bumpTex.minFilter = THREE.LinearMipmapLinearFilter;
+  bumpTex.magFilter = THREE.LinearFilter;
+  bumpTex.anisotropy = 16;
+  bumpTex.needsUpdate = true;
+
+  return { map, bump: bumpTex };
+}
+
+/**
+ * Generates a sleek 256x256 reflective light-blue ballistic lens tint & subtle sky-glare sheen texture!
+ */
+export function buildLightBlueLensTexture(): THREE.CanvasTexture {
+  const size = 256;
+  const c = document.createElement('canvas');
+  c.width = size;
+  c.height = size;
+  const ctx = c.getContext('2d')!;
+
+  // Vibrant light-blue ballistic glass tint (sky-cyan upper reflection -> icy-blue mid -> slightly deeper blue lower rim)
+  const grad = ctx.createLinearGradient(0, 0, 0, size);
+  grad.addColorStop(0.0, '#b8f0ff');
+  grad.addColorStop(0.28, '#7ad8ff');
+  grad.addColorStop(0.62, '#4ab8f2');
+  grad.addColorStop(1.0, '#2a84c8');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+
+  // Crisp glossy diagonal specular glare bands across the wraparound visor glass
+  ctx.save();
+  ctx.rotate(-0.32);
+  const sheen = ctx.createLinearGradient(0, 40, 0, 155);
+  sheen.addColorStop(0.0, 'rgba(255, 255, 255, 0)');
+  sheen.addColorStop(0.35, 'rgba(235, 252, 255, 0.58)');
+  sheen.addColorStop(0.5, 'rgba(255, 255, 255, 0.72)');
+  sheen.addColorStop(0.7, 'rgba(200, 244, 255, 0.25)');
+  sheen.addColorStop(1.0, 'rgba(255, 255, 255, 0)');
+  ctx.fillStyle = sheen;
+  ctx.fillRect(-60, 40, size + 160, 115);
+  ctx.restore();
+
+  // Subtle dark inner anti-glare perimeter vignette
+  ctx.strokeStyle = 'rgba(12, 34, 62, 0.42)';
+  ctx.lineWidth = 10;
+  ctx.strokeRect(5, 5, size - 10, size - 10);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.anisotropy = 16;
+  tex.needsUpdate = true;
+  return tex;
+}

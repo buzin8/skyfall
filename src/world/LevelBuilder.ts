@@ -1506,16 +1506,67 @@ export class LevelBuilder {
       this.group.add(door);
     };
 
-    // Helper: Real 3D framed multi-pane glowing factory window with steel cross-mullions & sill!
-    const addFramedWindow = (x: number, y: number, z: number, w = 1.65, h = 2.15) => {
-      this.addBox(x, y, z - 0.02, w + 0.26, h + 0.26, 0.2, matDoorFrame, { collide: false, raycast: false, castShadow: false });
-      this.addBox(x, y, z + 0.02, w, h, 0.14, matWindowGlass, { collide: false, raycast: false, castShadow: false });
-      // Crisp 3D cross-mullion steel window bars
-      this.addBox(x, y, z + 0.1, w + 0.04, 0.09, 0.08, matDoorFrame, { collide: false, raycast: false, castShadow: false });
-      this.addBox(x, y, z + 0.1, 0.09, h + 0.04, 0.08, matDoorFrame, { collide: false, raycast: false, castShadow: false });
-      // Concrete windowsill with snow frost
-      this.addBox(x, y - h / 2 - 0.14, z + 0.12, w + 0.42, 0.16, 0.34, matTrimSlate, { collide: false, raycast: false, castShadow: false });
-      this.addBox(x, y - h / 2 - 0.04, z + 0.16, w + 0.36, 0.07, 0.24, matSnowCap, { collide: false, raycast: false, castShadow: false });
+    // Warm Alpine chalet materials (natural cedar timber, crisp cream window trim, slate & terracotta alpine roofs!)
+    const matTimberWarm = new THREE.MeshStandardMaterial({
+      color: 0x5c361e,
+      roughness: 0.74,
+      metalness: 0.04,
+      envMapIntensity: 0.7,
+    });
+    const matTrimCream = new THREE.MeshStandardMaterial({
+      color: 0xf4f0e8,
+      roughness: 0.62,
+      metalness: 0.04,
+      envMapIntensity: 0.85,
+    });
+    const matRoofSlate = new THREE.MeshStandardMaterial({
+      color: 0x2c3e52,
+      roughness: 0.7,
+      metalness: 0.14,
+      envMapIntensity: 0.9,
+    });
+    const matRoofTerracotta = new THREE.MeshStandardMaterial({
+      color: 0x8c3a2b,
+      roughness: 0.72,
+      metalness: 0.08,
+      envMapIntensity: 0.85,
+    });
+    const matPlasterBlue = new THREE.MeshStandardMaterial({
+      color: 0x3b84be,
+      roughness: 0.78,
+      metalness: 0.04,
+      envMapIntensity: 0.75,
+    });
+    const matPlasterOchre = new THREE.MeshStandardMaterial({
+      color: 0xe39638,
+      roughness: 0.78,
+      metalness: 0.04,
+      envMapIntensity: 0.75,
+    });
+
+    // Helper: Cozy European Alpine chalet window (cream wood frame, warm glowing glass, wooden shutters & snow-dusted sill!)
+    const addFramedWindow = (x: number, y: number, z: number, w = 1.55, h = 1.95, withShutters = true) => {
+      // Crisp cream-white wooden window casing
+      this.addBox(x, y, z + 0.02, w + 0.24, h + 0.24, 0.14, matTrimCream, { collide: false, raycast: false, castShadow: false });
+      // Warm backlit amber interior glass
+      this.addBox(x, y, z + 0.07, w, h, 0.08, matWindowGlass, { collide: false, raycast: false, castShadow: false });
+      // Slender cream-white wooden sash dividers (not dark prison bars!)
+      this.addBox(x, y + h * 0.05, z + 0.12, w + 0.02, 0.07, 0.05, matTrimCream, { collide: false, raycast: false, castShadow: false });
+      this.addBox(x, y, z + 0.12, 0.07, h + 0.02, 0.05, matTrimCream, { collide: false, raycast: false, castShadow: false });
+      // Warm wooden alpine shutters flanking left & right
+      if (withShutters) {
+        const shW = 0.42;
+        for (const sx of [-1, 1]) {
+          this.addBox(x + sx * (w * 0.5 + shW * 0.5 + 0.14), y, z + 0.07, shW, h + 0.14, 0.08, matTimberWarm, {
+            collide: false,
+            raycast: false,
+            castShadow: false,
+          });
+        }
+      }
+      // Rustic timber windowsill topped with fresh white snow cushion
+      this.addBox(x, y - h / 2 - 0.14, z + 0.15, w + 0.44, 0.14, 0.34, matTimberWarm, { collide: false, raycast: false, castShadow: false });
+      this.addBox(x, y - h / 2 - 0.04, z + 0.19, w + 0.36, 0.08, 0.24, matSnowCap, { collide: false, raycast: false, castShadow: false });
     };
 
     // 3. Full BGMI Vikendi Snow Courtyard Floor + Endless Alpine Snowfields + Sculpted 3D Snowbanks!
@@ -1626,79 +1677,210 @@ export class LevelBuilder {
     addMetalDoor(-15.52, 11.2, Math.PI / 2);
     addMetalDoor(15.52, -7.2, -Math.PI / 2);
 
-    // 5. Vibrant Multi-Colourful Hero North Skyline (Silo Tower + Teal & Terracotta/Ochre Factory Halls!)
+    // 5. Crisp Symmetrical Hero North Skyline (Centered Silo Tower + Flush Teal & Ochre Halls + Proper Flanged Pipe Bridges!)
     const siloGroup = new THREE.Group();
-    siloGroup.position.set(-0.6, 0, -22.2);
-    const siloCyl = new THREE.Mesh(new THREE.CylinderGeometry(4.2, 4.4, 14.5, 24), matSilo);
-    siloCyl.position.y = 7.25;
+    siloGroup.position.set(0.0, 0, -22.2);
+    // Uniform precision cylinder (radius 4.1 -> spans x in [-4.1, +4.1], zero taper mismatch!)
+    const siloCyl = new THREE.Mesh(new THREE.CylinderGeometry(4.1, 4.1, 14.4, 32), matSilo);
+    siloCyl.position.y = 7.2;
     siloGroup.add(siloCyl);
-    // Vivid golden-yellow + bright orange industrial safety rings on Silo
-    const siloStripeY = new THREE.Mesh(new THREE.CylinderGeometry(4.28, 4.28, 0.9, 24), matSiloYellow);
-    siloStripeY.position.y = 10.8;
+    // Flush golden-yellow + bright orange industrial safety rings wrapping cleanly around cylinder
+    const siloStripeY = new THREE.Mesh(new THREE.CylinderGeometry(4.125, 4.125, 0.9, 32), matSiloYellow);
+    siloStripeY.position.y = 10.6;
     siloGroup.add(siloStripeY);
-    const siloStripeO = new THREE.Mesh(new THREE.CylinderGeometry(4.3, 4.3, 0.55, 24), matSiloOrange);
-    siloStripeO.position.y = 9.85;
+    const siloStripeO = new THREE.Mesh(new THREE.CylinderGeometry(4.125, 4.125, 0.55, 32), matSiloOrange);
+    siloStripeO.position.y = 9.65;
     siloGroup.add(siloStripeO);
-    for (const by of [6.4, 8.4, 12.6, 14.3]) {
-      const band = new THREE.Mesh(new THREE.CylinderGeometry(4.38, 4.38, 0.28, 24), matDoorFrame);
+    for (const by of [6.2, 8.2, 12.4, 14.25]) {
+      const band = new THREE.Mesh(new THREE.CylinderGeometry(4.19, 4.19, 0.24, 32), matDoorFrame);
       band.position.y = by;
       siloGroup.add(band);
     }
-    // Top wraparound maintenance catwalk rail & glowing red aviation roof beacon!
-    const catwalkRing = new THREE.Mesh(new THREE.TorusGeometry(4.65, 0.14, 8, 28), matDoorFrame);
-    catwalkRing.rotation.x = Math.PI / 2;
-    catwalkRing.position.y = 14.4;
-    siloGroup.add(catwalkRing);
-    const siloCap = new THREE.Mesh(new THREE.ConeGeometry(4.5, 2.0, 24), matTrimSlate);
-    siloCap.position.y = 15.5;
+    // Crisp welded roof cornice, conical steel dome roof, snow blanket & centered red aviation beacon
+    const siloCornice = new THREE.Mesh(new THREE.CylinderGeometry(4.32, 4.22, 0.24, 32), matDoorFrame);
+    siloCornice.position.y = 14.42;
+    siloGroup.add(siloCornice);
+    const siloCap = new THREE.Mesh(new THREE.ConeGeometry(4.35, 2.0, 32), matTrimSlate);
+    siloCap.position.y = 15.52;
     siloGroup.add(siloCap);
-    // Crisp snow blanket clinging to the Vikendi silo dome roof
-    const siloSnowCap = new THREE.Mesh(new THREE.ConeGeometry(4.36, 1.88, 24), matSnowCap);
+    const siloSnowCap = new THREE.Mesh(new THREE.ConeGeometry(4.2, 1.88, 32), matSnowCap);
     siloSnowCap.position.y = 15.66;
     siloGroup.add(siloSnowCap);
-    const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 8), this.matEmissiveCrimson);
+    const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.28, 12, 10), this.matEmissiveCrimson);
     beacon.position.y = 16.72;
     siloGroup.add(beacon);
     this.group.add(siloGroup);
 
-    // RIGHT FACTORY HALL: Vibrant terracotta brick lower + bold sun-ochre corrugated upper + 3D golden windows + steel catwalk!
-    this.addBox(10.0, 4.6, -22.0, 12.4, 9.2, 6.0, matBrick, { collide: false, raycast: false, castShadow: false });
-    this.addBox(10.0, 11.1, -22.0, 12.6, 3.8, 6.1, matCladdingOchre, { collide: false, raycast: false, castShadow: false });
-    this.addBox(10.0, 9.2, -18.92, 12.7, 0.34, 0.34, matDoorFrame, { collide: false, raycast: false, castShadow: false });
-    this.addBox(10.0, 13.15, -22.0, 13.0, 0.36, 6.5, matTrimSlate, { collide: false, raycast: false, castShadow: false });
-    this.addBox(10.0, 13.4, -22.0, 12.7, 0.18, 6.2, matSnowCap, { collide: false, raycast: false, castShadow: false });
-    for (const wx of [6.2, 9.8, 13.4]) {
-      addFramedWindow(wx, 11.0, -18.92, 1.72, 2.1);
-    }
-    // Exterior steel balcony catwalk & corner structural beams on right hall
-    this.buildElevatedCatwalk(9.8, 7.6, -18.3, 11.4, 1.25);
-    for (const bx of [4.1, 8.0, 12.0, 15.8]) {
-      this.addBox(bx, 8.9, -18.88, 0.36, 8.4, 0.36, matDoorFrame, { collide: false, raycast: false, castShadow: false });
-    }
-    // Twin overhead steel transfer ducts linking Silo to Right Hall
-    this.addBox(2.4, 9.8, -21.8, 6.2, 0.65, 0.85, matDoorFrame, { collide: false, raycast: false, castShadow: false });
-    this.addBox(2.4, 10.6, -21.8, 6.2, 0.38, 0.52, matSiloOrange, { collide: false, raycast: false, castShadow: false });
+    // Helper: Authentic BGMI Vikendi European Alpine Lodge / Chalet (pitched snow-laden roof, cozy timber trim,
+    // cream-framed glowing windows with shutters, front dormer & brick chimney — ZERO boxy jail bars!)
+    const buildVikendiAlpineChalet = (opts: {
+      cx: number;
+      cz: number;
+      w: number;
+      d: number;
+      brickH: number;
+      upperH: number;
+      upperMat: THREE.Material;
+      roofMat: THREE.Material;
+      withBalcony: boolean;
+      chimneySide: -1 | 1;
+    }) => {
+      const { cx, cz, w, d, brickH, upperH, upperMat, roofMat, withBalcony, chimneySide } = opts;
+      const eaveY = brickH + upperH;
+      const frontZ = cz + d * 0.5;
 
-    // LEFT WAREHOUSE ANNEX: Vibrant electric teal-blue corrugated upper facade over brick + glowing golden windows + smokestack!
-    this.addBox(-11.4, 3.8, -22.2, 10.6, 7.6, 5.8, matBrick, { collide: false, raycast: false, castShadow: false });
-    this.addBox(-11.4, 9.6, -22.2, 10.8, 4.0, 5.9, matCladdingTeal, { collide: false, raycast: false, castShadow: false });
-    this.addBox(-11.4, 11.75, -22.2, 11.1, 0.34, 6.3, matTrimSlate, { collide: false, raycast: false, castShadow: false });
-    this.addBox(-11.4, 11.98, -22.2, 10.8, 0.16, 6.0, matSnowCap, { collide: false, raycast: false, castShadow: false });
-    for (const wx of [-14.2, -11.4, -8.6]) {
-      addFramedWindow(wx, 9.5, -19.22, 1.55, 1.95);
-    }
-    for (const bx of [-16.3, -12.8, -9.8, -6.3]) {
-      this.addBox(bx, 8.4, -19.18, 0.34, 6.8, 0.34, matDoorFrame, { collide: false, raycast: false, castShadow: false });
-    }
-    // Tall striped industrial smokestack rising from left teal warehouse
-    const stack = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.78, 5.4, 14), matDoorFrame);
-    stack.position.set(-14.2, 14.5, -22.2);
-    this.group.add(stack);
-    const stackBand = new THREE.Mesh(new THREE.CylinderGeometry(0.67, 0.69, 0.72, 14), matSiloOrange);
-    stackBand.position.set(-14.2, 15.8, -22.2);
-    this.group.add(stackBand);
-    // Overhead steel pipe linking Silo to Left Teal Annex
-    this.addBox(-4.6, 9.2, -22.0, 5.2, 0.54, 0.64, matDoorFrame, { collide: false, raycast: false, castShadow: false });
+      // 1. Exact flush lower brick story + upper colourful Alpine stucco story (100% same width & depth -> zero bleed!)
+      this.addBox(cx, brickH * 0.5, cz, w, brickH, d, matBrick, { collide: false, raycast: false, castShadow: false });
+      this.addBox(cx, brickH + upperH * 0.5, cz, w, upperH, d, upperMat, { collide: false, raycast: false, castShadow: false });
+
+      // Warm cedar timber story belt & clean corner wood quoins (cozy alpine framing instead of prison bars!)
+      this.addBox(cx, brickH, cz, w + 0.18, 0.24, d + 0.18, matTimberWarm, { collide: false, raycast: false, castShadow: false });
+      for (const sx of [-1, 1]) {
+        for (const sz of [-1, 1]) {
+          this.addBox(cx + sx * (w * 0.5 - 0.06), eaveY * 0.5, cz + sz * (d * 0.5 - 0.06), 0.24, eaveY, 0.24, matTimberWarm, {
+            collide: false,
+            raycast: false,
+            castShadow: false,
+          });
+        }
+      }
+
+      // 2. Three evenly spaced warm glowing Alpine windows with cream frames, shutters & snow sills
+      const winY = brickH + upperH * 0.5;
+      const winSpread = w * 0.31;
+      for (const wx of [cx - winSpread, cx, cx + winSpread]) {
+        addFramedWindow(wx, winY, frontZ, 1.48, 1.85, true);
+      }
+
+      // Optional warm cedar chalet balcony deck with cozy timber railing (NO iron prison cage!)
+      if (withBalcony) {
+        const balY = brickH - 0.1;
+        const balD = 1.15;
+        const balZ = frontZ + balD * 0.5;
+        const balW = w - 0.6;
+        this.addBox(cx, balY, balZ, balW, 0.18, balD, matTimberWarm, { collide: false, raycast: false, castShadow: false });
+        // Cozy timber balcony handrail & lower slat
+        this.addBox(cx, balY + 0.96, frontZ + balD - 0.08, balW, 0.12, 0.12, matTimberWarm, { collide: false, raycast: false, castShadow: false });
+        this.addBox(cx, balY + 0.52, frontZ + balD - 0.08, balW, 0.22, 0.06, matTimberWarm, { collide: false, raycast: false, castShadow: false });
+        this.addBox(cx, balY + 1.05, frontZ + balD - 0.08, balW - 0.1, 0.07, 0.14, matSnowCap, { collide: false, raycast: false, castShadow: false });
+        for (let px = -balW * 0.48; px <= balW * 0.49; px += balW / 5) {
+          this.addBox(cx + px, balY + 0.5, frontZ + balD - 0.08, 0.1, 0.96, 0.1, matTimberWarm, { collide: false, raycast: false, castShadow: false });
+        }
+      }
+
+      // 3. Steep Pitched Snow-Laden Alpine Gable Roof (37° pitch + thick snow slopes + matching side gable triangles!)
+      const overhangZ = 0.6;
+      const overhangX = 0.55;
+      const halfD = d * 0.5 + overhangZ;
+      const ridgeH = 2.75;
+      const pitch = Math.atan2(ridgeH, halfD);
+      const slopeLen = Math.hypot(halfD, ridgeH) + 0.16;
+      const roofW = w + overhangX * 2;
+      const roofThick = 0.24;
+      const snowThick = 0.18;
+
+      // Exact triangular side-gable infill walls tucked flush under roof slopes
+      const gableH = ridgeH * ((d * 0.5) / halfD);
+      const gableShape = new THREE.Shape();
+      gableShape.moveTo(-d * 0.5, 0);
+      gableShape.lineTo(d * 0.5, 0);
+      gableShape.lineTo(0, gableH);
+      gableShape.closePath();
+      const gableGeo = new THREE.ExtrudeGeometry(gableShape, { depth: w, bevelEnabled: false });
+      gableGeo.rotateY(Math.PI / 2); // Shape XY (Z-span, Y-height) extrudes along +X
+      gableGeo.translate(cx - w * 0.5, eaveY, cz);
+      this.group.add(new THREE.Mesh(gableGeo, upperMat));
+
+      // Front (+Z) & Back (-Z) pitched roof planes + thick fresh white snow blankets sitting flush on top!
+      for (const sz of [-1, 1]) {
+        const slope = new THREE.Mesh(new THREE.BoxGeometry(roofW, roofThick, slopeLen), roofMat);
+        const cy = eaveY + ridgeH * 0.5;
+        const czOff = cz + sz * (halfD * 0.5);
+        slope.position.set(cx, cy, czOff);
+        slope.rotation.x = sz * pitch;
+        this.group.add(slope);
+
+        // Snow blanket offset cleanly along the roof surface normal (0, cos(pitch), sz * sin(pitch))
+        const off = roofThick * 0.5 + snowThick * 0.45;
+        const snow = new THREE.Mesh(new THREE.BoxGeometry(roofW - 0.12, snowThick, slopeLen - 0.08), matSnowCap);
+        snow.position.set(cx, cy + Math.cos(pitch) * off, czOff + sz * Math.sin(pitch) * off);
+        snow.rotation.x = sz * pitch;
+        this.group.add(snow);
+      }
+      // Crisp horizontal ridge beam & snow crest sealing the apex cleanly
+      this.addBox(cx, eaveY + ridgeH + 0.14, cz, roofW + 0.06, 0.24, 0.34, matTimberWarm, { collide: false, raycast: false, castShadow: false });
+      this.addBox(cx, eaveY + ridgeH + 0.3, cz, roofW - 0.08, 0.14, 0.28, matSnowCap, { collide: false, raycast: false, castShadow: false });
+
+      // 4. Charming Front Alpine Gable Dormer Window rising smoothly out of the pitched roof!
+      const dormW = 3.0;
+      const dormH = 1.65;
+      const dormZ = cz + d * 0.22;
+      const dormY = eaveY + 1.05;
+      this.addBox(cx, dormY, dormZ, dormW, dormH, 2.2, upperMat, { collide: false, raycast: false, castShadow: false });
+      addFramedWindow(cx, dormY + 0.05, dormZ + 1.1, 1.05, 1.12, false);
+      // Dormer triangular front gable infill so zero gap shows under dormer eaves!
+      const dGableShape = new THREE.Shape();
+      dGableShape.moveTo(-dormW * 0.5, 0);
+      dGableShape.lineTo(dormW * 0.5, 0);
+      dGableShape.lineTo(0, 1.08);
+      dGableShape.closePath();
+      const dGableGeo = new THREE.ExtrudeGeometry(dGableShape, { depth: 2.2, bevelEnabled: false });
+      dGableGeo.translate(cx, dormY + dormH * 0.5, dormZ - 1.1);
+      this.group.add(new THREE.Mesh(dGableGeo, upperMat));
+
+      // Dormer pitched roof + snow cap
+      const dPitch = 0.62;
+      for (const sx of [-1, 1]) {
+        const dRoof = new THREE.Mesh(new THREE.BoxGeometry(2.05, 0.16, 2.6), roofMat);
+        dRoof.position.set(cx + sx * 0.85, dormY + dormH * 0.5 + 0.55, dormZ + 0.1);
+        dRoof.rotation.z = -sx * dPitch;
+        this.group.add(dRoof);
+
+        const dSnow = new THREE.Mesh(new THREE.BoxGeometry(1.98, 0.12, 2.52), matSnowCap);
+        dSnow.position.set(
+          cx + sx * (0.85 + Math.sin(dPitch) * 0.12),
+          dormY + dormH * 0.5 + 0.55 + Math.cos(dPitch) * 0.12,
+          dormZ + 0.1
+        );
+        dSnow.rotation.z = -sx * dPitch;
+        this.group.add(dSnow);
+      }
+
+      // 5. Cozy brick chimney rising cleanly through the snow roof with stone cap & snow pillow!
+      const chX = cx + chimneySide * (w * 0.32);
+      const chZ = cz - 0.8;
+      this.addBox(chX, eaveY + ridgeH + 0.45, chZ, 1.05, 2.8, 1.05, matBrick, { collide: false, raycast: false, castShadow: false });
+      this.addBox(chX, eaveY + ridgeH + 1.9, chZ, 1.24, 0.2, 1.24, matTrimCream, { collide: false, raycast: false, castShadow: false });
+      this.addBox(chX, eaveY + ridgeH + 2.04, chZ, 1.12, 0.12, 1.12, matSnowCap, { collide: false, raycast: false, castShadow: false });
+    };
+
+    // RIGHT ALPINE LODGE (Warm Golden-Ochre Plaster + Terracotta Pitched Snow Roof + Warm Cedar Balcony!)
+    buildVikendiAlpineChalet({
+      cx: 11.0,
+      cz: -22.2,
+      w: 10.6,
+      d: 5.8,
+      brickH: 8.2,
+      upperH: 4.0,
+      upperMat: matPlasterOchre,
+      roofMat: matRoofTerracotta,
+      withBalcony: true,
+      chimneySide: 1,
+    });
+
+    // LEFT ALPINE LODGE (Nordic Sky-Blue Plaster + Blue-Slate Pitched Snow Roof + Front Gable Dormer!)
+    buildVikendiAlpineChalet({
+      cx: -11.0,
+      cz: -22.2,
+      w: 10.6,
+      d: 5.8,
+      brickH: 7.4,
+      upperH: 3.9,
+      upperMat: matPlasterBlue,
+      roofMat: matRoofSlate,
+      withBalcony: false,
+      chimneySide: -1,
+    });
 
     // Overhead Courtyard Steel Portal Truss anchored solidly on twin ground-to-truss steel I-beam support towers!
     for (const sx of [-7.45, 7.45]) {
@@ -2334,7 +2516,6 @@ export class LevelBuilder {
     this.addBox(7.4, 3.85, 7.12, 0.14, 1.9, 0.14, this.matEmissiveAmber, { collide: false, raycast: false, castShadow: false });
     this.addBox(-2.62, 2.15, -1.2, 0.08, 0.14, 4.2, this.matEmissiveCyan, { collide: false, raycast: false, castShadow: false });
     this.addBox(2.92, 2.15, -3.5, 0.08, 0.14, 4.2, this.matEmissiveAmber, { collide: false, raycast: false, castShadow: false });
-    this.addBox(2.4, 9.8, -21.35, 3.6, 0.16, 0.12, this.matEmissiveCyan, { collide: false, raycast: false, castShadow: false });
 
     // Flickering burning industrial fire barrels warming the courtyard corners (mirrors across wet snow!)
     this.addBurningFireBarrel(-6.8, -5.8, 30, 0.6, true);

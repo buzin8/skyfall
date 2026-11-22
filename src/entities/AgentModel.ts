@@ -5,8 +5,10 @@ import { Team } from '../types';
 import { PBRTextureSet, TextureLibrary } from '../textures/ProceduralTextures';
 import {
   buildBrushedGunmetalTexture,
+  buildLightBlueLensTexture,
   buildRefinedFaceTexture,
   buildSmoothAkWoodTexture,
+  buildTacticalMaskTextures,
   smoothGeometryNormals,
 } from '../utils/MeshSmoothing';
 
@@ -404,9 +406,194 @@ function buildCompactBotAkm(): {
   return { weaponPivot, muzzlePoint, muzzleFlash, rightGripTarget, leftGripTarget };
 }
 
-// Cached smooth vertex-contoured face geometry with crisp planar-spherical front UVs
+// Cached smooth vertex-contoured face, tactical mesh half-mask & wraparound light-blue ballistic glasses geometries!
 let sharedRefinedFaceGeo: THREE.BufferGeometry | null = null;
+let sharedTacticalMaskGeo: THREE.BufferGeometry | null = null;
+let sharedBallisticLensGeo: THREE.BufferGeometry | null = null;
+let sharedGlassesTopRimGeo: THREE.BufferGeometry | null = null;
+let sharedGlassesBotRimGeo: THREE.BufferGeometry | null = null;
+let sharedTacticalMaskMat: THREE.MeshStandardMaterial | null = null;
+let sharedLightBlueLensMat: THREE.MeshStandardMaterial | null = null;
 const cachedFaceTextures = new Map<string, THREE.CanvasTexture>();
+
+function sampleOperatorFaceSurface(theta: number, yFaceGroup: number, outOffset = 0): THREE.Vector3 {
+  const yF = yFaceGroup + 0.35;
+  const ny = THREE.MathUtils.clamp(yF / 7.57, -0.94, 0.94);
+  const horizR = Math.sqrt(Math.max(0.05, 1 - ny * ny));
+  const x0 = Math.sin(theta) * 6.174 * horizR;
+  const z0 = Math.cos(theta) * 5.733 * horizR;
+  const nose = Math.exp(-Math.pow(x0 / 1.35, 2) - Math.pow((yF + 0.65) / 2.2, 2)) * 1.18;
+  const brow = Math.exp(-Math.pow(x0 / 4.2, 2) - Math.pow((yF - 2.3) / 1.15, 2)) * 0.35;
+  const chin = Math.exp(-Math.pow(x0 / 2.6, 2) - Math.pow((yF + 4.8) / 1.6, 2)) * 0.38;
+  const zSurf = z0 + nose + brow + chin + 0.35;
+  return new THREE.Vector3(
+    x0 + Math.sin(theta) * outOffset,
+    yFaceGroup,
+    zSurf + Math.cos(theta) * outOffset
+  );
+}
+
+/**
+ * Contoured 3D SpecOps half-face perforated mesh mask wrapping tightly over nose bridge,
+ * cheeks, mouth & jaw — with an inverted-V nose peak tucking seamlessly into the ballistic glasses!
+ */
+function getTacticalMaskGeometry(): THREE.BufferGeometry {
+  if (sharedTacticalMaskGeo) return sharedTacticalMaskGeo;
+  const cols = 28;
+  const rows = 18;
+  const positions: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+
+  for (let r = 0; r <= rows; r++) {
+    const v = r / rows; // 0 = bottom jaw/chin, 1 = top V-seam meeting glasses
+    for (let c = 0; c <= cols; c++) {
+      const u = (c / cols) * 2 - 1; // -1..+1 left cheek to right cheek
+      const theta = u * 1.32;
+      const nosePeak = Math.exp(-Math.pow(u / 0.24, 2)) * 1.58;
+      const cheekRise = Math.pow(Math.abs(u), 2.2) * 0.85;
+      const yTop = -1.16 + nosePeak + cheekRise;
+      const yBot = -6.75 + Math.pow(Math.abs(u), 1.8) * 2.55;
+      const y = THREE.MathUtils.lerp(yBot, yTop, v);
+
+      // Molded rigid ballistic mesh contour standing slightly proud over nose & mouth breather zone
+      const mouthMolding = Math.exp(-Math.pow(u / 0.48, 2) - Math.pow((v - 0.52) / 0.38, 2)) * 0.42;
+      const sideTaper = 0.52 - Math.abs(u) * 0.14;
+      const p = sampleOperatorFaceSurface(theta, y, sideTaper + mouthMolding);
+
+      positions.push(p.x, p.y, p.z);
+      uvs.push(c / cols, v);
+    }
+  }
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const a = r * (cols + 1) + c;
+      const b = a + 1;
+      const d = (r + 1) * (cols + 1) + c;
+      const e = d + 1;
+      indices.push(a, b, d, b, e, d);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  sharedTacticalMaskGeo = geo;
+  return geo;
+}
+
+function sampleGlassesPoint(u: number, v: number): THREE.Vector3 {
+  const theta = u * 1.15; // ±66° aggressive ballistic wraparound arc
+  const yTop = 2.68 - Math.exp(-Math.pow(u / 0.28, 2)) * 0.26 - Math.pow(Math.abs(u), 2.4) * 0.42;
+  const noseCutout = Math.exp(-Math.pow(u / 0.22, 2)) * 1.98;
+  const outerSweep = Math.pow(Math.abs(u), 2.1) * 1.48;
+  const yBot = -1.26 + noseCutout + outerSweep;
+  const y = THREE.MathUtils.lerp(yBot, yTop, v);
+
+  // Sleek forward-canting ballistic visor shield sitting cleanly over eye sockets & mask nose bridge
+  const browCant = (v - 0.35) * 0.42;
+  const rx = 6.46 + browCant * 0.25;
+  const rz = 6.82 + browCant;
+  return new THREE.Vector3(Math.sin(theta) * rx, y, Math.cos(theta) * rz + 0.62);
+}
+
+/**
+ * Sleek wraparound ballistic visor-glasses lens + matching top & bottom matte-black frame rims!
+ */
+function ensureBallisticGlassesGeometries(): {
+  lens: THREE.BufferGeometry;
+  topRim: THREE.BufferGeometry;
+  botRim: THREE.BufferGeometry;
+} {
+  if (!sharedBallisticLensGeo) {
+    const cols = 32;
+    const rows = 10;
+    const positions: number[] = [];
+    const uvs: number[] = [];
+    const indices: number[] = [];
+
+    for (let r = 0; r <= rows; r++) {
+      const v = r / rows;
+      for (let c = 0; c <= cols; c++) {
+        const u = (c / cols) * 2 - 1;
+        const p = sampleGlassesPoint(u, v);
+        positions.push(p.x, p.y, p.z);
+        uvs.push(c / cols, v);
+      }
+    }
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const a = r * (cols + 1) + c;
+        const b = a + 1;
+        const d = (r + 1) * (cols + 1) + c;
+        const e = d + 1;
+        indices.push(a, b, d, b, e, d);
+      }
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+    sharedBallisticLensGeo = geo;
+
+    // Matte-black upper brow goggle frame rail + side temple sweeps
+    const topPts: THREE.Vector3[] = [];
+    const botPts: THREE.Vector3[] = [];
+    for (let i = 0; i <= 24; i++) {
+      const u = (i / 24) * 2 - 1;
+      topPts.push(sampleGlassesPoint(u, 1.0));
+      botPts.push(sampleGlassesPoint(u, 0.0));
+    }
+    sharedGlassesTopRimGeo = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(topPts), 28, 0.34, 7, false);
+    sharedGlassesBotRimGeo = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(botPts), 28, 0.19, 6, false);
+  }
+
+  return {
+    lens: sharedBallisticLensGeo!,
+    topRim: sharedGlassesTopRimGeo!,
+    botRim: sharedGlassesBotRimGeo!,
+  };
+}
+
+function ensureTacticalHeadgearMaterials(): {
+  maskMat: THREE.MeshStandardMaterial;
+  lensMat: THREE.MeshStandardMaterial;
+} {
+  if (!sharedTacticalMaskMat) {
+    const maskTex = buildTacticalMaskTextures();
+    sharedTacticalMaskMat = new THREE.MeshStandardMaterial({
+      map: maskTex.map,
+      bumpMap: maskTex.bump,
+      bumpScale: 0.24,
+      roughness: 0.84,
+      metalness: 0.1,
+      envMapIntensity: 0.65,
+      side: THREE.DoubleSide,
+    });
+  }
+  if (!sharedLightBlueLensMat) {
+    const lensTex = buildLightBlueLensTexture();
+    sharedLightBlueLensMat = new THREE.MeshStandardMaterial({
+      map: lensTex,
+      color: 0xa2ecff,
+      emissive: new THREE.Color(0x289ce6),
+      emissiveIntensity: 0.32,
+      roughness: 0.06,
+      metalness: 0.28,
+      envMapIntensity: 2.8,
+      transparent: true,
+      opacity: 0.88,
+      side: THREE.DoubleSide,
+    });
+  }
+  return { maskMat: sharedTacticalMaskMat, lensMat: sharedLightBlueLensMat };
+}
 
 function getRefinedFaceGeometry(): THREE.BufferGeometry {
   if (sharedRefinedFaceGeo) return sharedRefinedFaceGeo;
@@ -467,19 +654,54 @@ function buildExpressiveOperatorFace(team: Team, variant: number): THREE.Group {
   faceMesh.position.set(0, -0.35, 0.35);
   face.add(faceMesh);
 
-  // Subtle low-profile dark helmet chinstrap framing the lower jaw
+  // SpecOps half-face perforated mesh mask + wraparound LIGHT-BLUE ballistic glasses (for BOTH teammates & enemies!)
+  const { maskMat, lensMat } = ensureTacticalHeadgearMaterials();
+  const { lens: lensGeo, topRim: topRimGeo, botRim: botRimGeo } = ensureBallisticGlassesGeometries();
+
+  const maskMesh = new THREE.Mesh(getTacticalMaskGeometry(), maskMat);
+  face.add(maskMesh);
+
   const matGearDark = new THREE.MeshStandardMaterial({
-    color: 0x222832,
-    roughness: 0.56,
-    metalness: 0.32,
+    color: 0x1b2028,
+    roughness: 0.48,
+    metalness: 0.4,
   });
-  const chinStrap = new THREE.Mesh(new THREE.TorusGeometry(5.55, 0.32, 6, 18, Math.PI * 0.72), matGearDark);
+
+  // Curved wraparound light-blue ballistic shield lens + matte-black frame rims & temple arms
+  const lensMesh = new THREE.Mesh(lensGeo, lensMat);
+  face.add(lensMesh);
+  face.add(new THREE.Mesh(topRimGeo, matGearDark));
+  face.add(new THREE.Mesh(botRimGeo, matGearDark));
+
+  // Side temple arms & helmet strap mounts tucking neatly back into helmet sides
+  for (const sx of [-1, 1]) {
+    const temple = new THREE.Mesh(new THREE.BoxGeometry(0.45, 1.35, 4.4), matGearDark);
+    temple.position.set(sx * 5.95, 1.25, 1.85);
+    temple.rotation.y = sx * -0.18;
+    face.add(temple);
+  }
+
+  // Sleek tactical comms boom microphone curving from left ear-pad to the lower mesh mask!
+  const boomCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(-5.8, -2.0, 1.8),
+    new THREE.Vector3(-5.1, -3.5, 4.6),
+    new THREE.Vector3(-2.6, -4.1, 6.6),
+  ]);
+  const boomArm = new THREE.Mesh(new THREE.TubeGeometry(boomCurve, 12, 0.2, 6, false), matGearDark);
+  face.add(boomArm);
+  const micFoam = new THREE.Mesh(new THREE.CapsuleGeometry(0.42, 0.55, 4, 8), matGearDark);
+  micFoam.position.set(-2.35, -4.15, 6.72);
+  micFoam.rotation.z = Math.PI / 2;
+  face.add(micFoam);
+
+  // Subtle low-profile dark helmet chinstrap framing the lower jaw beneath the mask
+  const chinStrap = new THREE.Mesh(new THREE.TorusGeometry(5.65, 0.3, 6, 18, Math.PI * 0.72), matGearDark);
   chinStrap.rotation.x = Math.PI * 0.34;
   chinStrap.rotation.z = -Math.PI * 0.86;
-  chinStrap.position.set(0, -4.65, 1.5);
+  chinStrap.position.set(0, -4.75, 1.45);
   face.add(chinStrap);
 
-  // Sleek slim tactical helmet brow accent strip (keeps forehead & eyebrows 100% unobstructed!)
+  // Matte-black tactical NVG mount shroud centered right above the ballistic glasses + subtle team IFF pip
   const matIffGlow = new THREE.MeshStandardMaterial({
     color: isAlly ? 0x62f7ff : 0xff4b34,
     emissive: new THREE.Color(isAlly ? 0x20e2ff : 0xff2816),
@@ -487,12 +709,17 @@ function buildExpressiveOperatorFace(team: Team, variant: number): THREE.Group {
     roughness: 0.25,
     metalness: 0.2,
   });
-  const browTrim = new THREE.Mesh(new THREE.BoxGeometry(9.6, 1.15, 2.0), matGearDark);
-  browTrim.position.set(0, 5.8, 4.4);
+  const nvgShroud = new THREE.Mesh(new THREE.BoxGeometry(3.4, 2.3, 1.45), matGearDark);
+  nvgShroud.position.set(0, 4.35, 6.15);
+  nvgShroud.rotation.x = -0.26;
+  face.add(nvgShroud);
+
+  const browTrim = new THREE.Mesh(new THREE.BoxGeometry(9.6, 1.05, 1.9), matGearDark);
+  browTrim.position.set(0, 5.75, 4.4);
   browTrim.rotation.x = -0.2;
   face.add(browTrim);
-  const iffPip = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.52, 0.6), matIffGlow);
-  iffPip.position.set(0, 5.85, 5.42);
+  const iffPip = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.48, 0.55), matIffGlow);
+  iffPip.position.set(0, 5.8, 5.38);
   iffPip.rotation.x = -0.2;
   face.add(iffPip);
 
