@@ -852,9 +852,9 @@ export class TacticalAgent {
       const strideBobX = Math.cos(this.idlePhase * 2.0) * (spd > 0.4 ? 0.008 : 0.002);
       const runCant = wRun * 0.06;
       this.rig.weaponPivot.position.set(
-        -0.15 + strideBobX,
-        1.345 + strideBobY - this.crouchAmount * 0.055,
-        0.225 - this.recoilKick * 0.042
+        -0.165 + strideBobX,
+        1.335 + strideBobY - this.crouchAmount * 0.055,
+        0.265 - this.recoilKick * 0.042
       );
       this.rig.weaponPivot.rotation.set(
         runCant - this.recoilKick * 0.1,

@@ -318,8 +318,8 @@ function buildCompactBotAkm(): {
 } {
   ensureBotAkmMaterials();
   const weaponPivot = new THREE.Group();
-  // Centered squarely into right shoulder pocket aiming dead-straight forward (zero crooked barrel!)
-  weaponPivot.position.set(-0.15, 1.345, 0.225);
+  // Cleared snugly outside chest armor & tucked into right shoulder pocket aiming dead-straight forward
+  weaponPivot.position.set(-0.165, 1.335, 0.265);
   weaponPivot.rotation.set(0, 0, 0);
 
   const akmGroup = new THREE.Group();
@@ -340,7 +340,7 @@ function buildCompactBotAkm(): {
     bevelSegments: 2,
   });
   stockGeo.translate(0, 0, -0.019);
-  stockGeo.rotateY(-Math.PI / 2); // -X becomes -Z rear!
+  stockGeo.rotateY(-Math.PI / 2); // -X becomes -Z rear, +X becomes +Z forward!
   const stock = new THREE.Mesh(stockGeo, sharedAkmWoodMat);
   stock.position.set(0, 0.0, -0.02);
   stock.castShadow = true;
@@ -373,23 +373,33 @@ function buildCompactBotAkm(): {
   upperGasTube.position.set(0, 0.032, 0.38);
   akmGroup.add(upperGasTube);
 
-  // Contoured pistol grip
-  const grip = new THREE.Mesh(new THREE.CapsuleGeometry(0.018, 0.085, 4, 8), sharedAkmDarkMat);
-  grip.position.set(0, -0.068, 0.03);
-  grip.rotation.x = -0.28;
+  // Contoured pistol grip angled cleanly rearward (negative X rotation tilts bottom toward -Z rear!)
+  const grip = new THREE.Mesh(new THREE.CapsuleGeometry(0.019, 0.095, 4, 8), sharedAkmDarkMat);
+  grip.position.set(0, -0.072, 0.024);
+  grip.rotation.x = 0.28;
   akmGroup.add(grip);
 
-  // Iconic curved 2-segment Bakelite 7.62 magazine
-  const magTop = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.115, 0.062), sharedAkmMagMat);
-  magTop.position.set(0, -0.078, 0.21);
-  magTop.rotation.x = 0.2;
-  magTop.castShadow = true;
-  akmGroup.add(magTop);
-  const magBot = new THREE.Mesh(new THREE.BoxGeometry(0.031, 0.115, 0.06), sharedAkmMagMat);
-  magBot.position.set(0, -0.172, 0.246);
-  magBot.rotation.x = 0.42;
-  magBot.castShadow = true;
-  akmGroup.add(magBot);
+  // Single seamless curved Bakelite 7.62 AKM banana magazine curving smoothly FORWARD (+Z) out of magwell!
+  const magShape = new THREE.Shape();
+  magShape.moveTo(0.032, 0.0);
+  magShape.quadraticCurveTo(0.048, -0.095, 0.094, -0.205);
+  magShape.lineTo(0.042, -0.224);
+  magShape.quadraticCurveTo(-0.002, -0.108, -0.022, 0.0);
+  magShape.closePath();
+  const magGeo = new THREE.ExtrudeGeometry(magShape, {
+    depth: 0.028,
+    bevelEnabled: true,
+    bevelThickness: 0.003,
+    bevelSize: 0.003,
+    bevelSegments: 2,
+    curveSegments: 12,
+  });
+  magGeo.translate(0, 0, -0.014);
+  magGeo.rotateY(-Math.PI / 2); // +X becomes +Z forward -> magazine arcs smoothly forward!
+  const akmMag = new THREE.Mesh(magGeo, sharedAkmMagMat);
+  akmMag.position.set(0, -0.022, 0.215);
+  akmMag.castShadow = true;
+  akmGroup.add(akmMag);
 
   // Smooth cylindrical barrel, gas block, slant brake & hooded AKM front sight post
   const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.014, 0.34, 10), sharedAkmSteelMat);
@@ -432,14 +442,14 @@ function buildCompactBotAkm(): {
   scarLower.position.set(0, -0.024, 0.12);
   scarGroup.add(scarLower);
 
-  const scarGrip = new THREE.Mesh(new THREE.CapsuleGeometry(0.018, 0.082, 4, 8), sharedAkmDarkMat);
-  scarGrip.position.set(0, -0.068, 0.03);
-  scarGrip.rotation.x = -0.26;
+  const scarGrip = new THREE.Mesh(new THREE.CapsuleGeometry(0.019, 0.09, 4, 8), sharedAkmDarkMat);
+  scarGrip.position.set(0, -0.072, 0.024);
+  scarGrip.rotation.x = 0.26;
   scarGroup.add(scarGrip);
 
   const scarMag = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.165, 0.062), sharedScarTanDarkMat);
-  scarMag.position.set(0, -0.105, 0.2);
-  scarMag.rotation.x = 0.12;
+  scarMag.position.set(0, -0.105, 0.21);
+  scarMag.rotation.x = -0.1; // Slight forward curve matching STANAG 5.56 magazine
   scarGroup.add(scarMag);
 
   const scarBarrel = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.014, 0.34, 10), sharedAkmDarkMat);
@@ -447,13 +457,14 @@ function buildCompactBotAkm(): {
   scarBarrel.position.set(0, 0.016, 0.64);
   scarGroup.add(scarBarrel);
 
-  // Exact IK grip anchors where the soldier's rigged hands lock cleanly onto the rifle!
+  // Exact WRIST-JOINT IK anchors offset cleanly below/behind pistol grip & below handguard
+  // so Mixamo's ~9cm palm+fingers wrap cleanly ON the grip & UNDER the wood — ZERO clipping inside the gun!
   const rightGripTarget = new THREE.Object3D();
-  rightGripTarget.position.set(-0.008, -0.056, 0.035);
+  rightGripTarget.position.set(-0.046, -0.118, -0.028);
   weaponPivot.add(rightGripTarget);
 
   const leftGripTarget = new THREE.Object3D();
-  leftGripTarget.position.set(0.014, -0.016, 0.34);
+  leftGripTarget.position.set(0.042, -0.088, 0.305);
   weaponPivot.add(leftGripTarget);
 
   const muzzlePoint = new THREE.Object3D();

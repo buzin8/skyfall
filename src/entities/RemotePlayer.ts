@@ -128,7 +128,7 @@ export class RemotePlayer {
       this.deathMidQuats.clear();
       this.deathTargetQuats.clear();
       this.rig.mixer?.update(0);
-      this.rig.weaponPivot.position.set(-0.15, 1.345, 0.225);
+      this.rig.weaponPivot.position.set(-0.165, 1.335, 0.265);
       this.rig.weaponPivot.rotation.set(0, 0, 0);
       if (this.rig.akmGroup && this.rig.scarGroup) {
         this.rig.akmGroup.visible = this.weaponSlot !== 1;
@@ -340,9 +340,9 @@ export class RemotePlayer {
       }
 
       this.rig.weaponPivot.position.set(
-        -0.15 + strideBobX,
-        1.345 + strideBobY + stockYComp - this.crouchAmount * 0.055,
-        0.225 - this.recoilKick * 0.042
+        -0.165 + strideBobX,
+        1.335 + strideBobY + stockYComp - this.crouchAmount * 0.055,
+        0.265 - this.recoilKick * 0.042
       );
       this.rig.weaponPivot.rotation.set(
         runCant + aimPitch - this.recoilKick * 0.1,
