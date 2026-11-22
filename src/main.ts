@@ -56,6 +56,7 @@ const TDM_MEDKIT_START = 1;
 const TDM_MEDKIT_HEAL = 75;
 const TDM_MEDKIT_TIME = 10.0;
 const TDM_LOOT_PICKUP_RANGE = 3.4;
+const TDM_SPAWN_SHIELD_DURATION = 3.0;
 
 /**
  * Generates a dark moody industrial PMREM reflection map with cyan overhead strips,
@@ -198,6 +199,7 @@ class SunfireGame {
   private tdmMedkits = 0;
   private activeHeal: { kind: 'bandage' | 'medkit'; elapsed: number; duration: number } | null = null;
   private localHealGraceTimer = 0;
+  private localSpawnShield = 0;
   private netSyncAccum = 0;
   private tdmSlowFrameAccum = 0;
   private graphicsPreset: 'bloom' | 'perf' | 'laptop' = 'bloom';
@@ -718,11 +720,13 @@ class SunfireGame {
   private startNewMatch(): void {
     this.isTdmMatch = false;
     this.activeHeal = null;
+    this.localSpawnShield = 0;
     this.tdmBandages = 0;
     this.tdmMedkits = 0;
     this.clearLootDrops();
     this.hud.setTdmMedSlotsVisible(false);
     this.hud.updateHealProgress(null, 0, 1);
+    this.hud.updateSpawnShield(0, TDM_SPAWN_SHIELD_DURATION);
 
     this.matchStarted = true;
     this.roundNumber = 1;
@@ -1369,20 +1373,22 @@ class SunfireGame {
     this.weapons.clearRoundFx();
     this.abilities.resetCharges();
 
-    // TDM-only medical loadout: 4 Bandages (B, 5s, +25 HP) & 1 Medkit (M, 10s, +75 HP)
+    // TDM-only medical loadout: 4 Bandages (B, 5s, +25 HP) & 1 Medkit (M, 10s, +75 HP) + 3s Spawn Invulnerability Shield!
     this.clearLootDrops();
     this.activeHeal = null;
     this.localHealGraceTimer = 0;
+    this.localSpawnShield = TDM_SPAWN_SHIELD_DURATION;
     this.tdmBandages = TDM_BANDAGE_START;
     this.tdmMedkits = TDM_MEDKIT_START;
     this.hud.setTdmMedSlotsVisible(true);
     this.hud.updateHealProgress(null, 0, 1);
     this.hud.updateMedkits(this.tdmBandages, this.tdmMedkits, null);
+    this.hud.updateSpawnShield(this.localSpawnShield, TDM_SPAWN_SHIELD_DURATION);
 
     for (const [id, rp] of this.remotePlayers) {
       const sp = round.spawns.find((s) => s.id === id);
       if (sp) {
-        rp.respawn(new THREE.Vector3(sp.pos.x, sp.pos.y, sp.pos.z), sp.yaw);
+        rp.respawn(new THREE.Vector3(sp.pos.x, sp.pos.y, sp.pos.z), sp.yaw, TDM_SPAWN_SHIELD_DURATION);
       }
     }
 
@@ -1402,6 +1408,7 @@ class SunfireGame {
           hp: 100,
           shield: 50,
           alive: true,
+          spawnShield: TDM_SPAWN_SHIELD_DURATION,
         });
         this.hostPlayerUtils.set(sp.id, {
           frag: 2,
@@ -1432,7 +1439,19 @@ class SunfireGame {
 
     const rp = this.remotePlayers.get(playerId);
     if (rp) {
-      rp.applyNetworkState(st.x, st.y, st.z, st.yaw, st.pitch, st.crouching, st.weaponSlot, st.hp, st.shield, st.alive);
+      rp.applyNetworkState(
+        st.x,
+        st.y,
+        st.z,
+        st.yaw,
+        st.pitch,
+        st.crouching,
+        st.weaponSlot,
+        st.hp,
+        st.shield,
+        st.alive,
+        st.spawnShield
+      );
     }
   }
 
@@ -1451,15 +1470,29 @@ class SunfireGame {
           this.player.hp = ps.hp;
         }
         this.player.shield = ps.shield;
+        this.localSpawnShield = ps.spawnShield ?? 0;
         if (this.player.alive && !ps.alive) {
           this.player.alive = false;
+          this.localSpawnShield = 0;
           if (this.activeHeal) this.cancelActiveHeal(false);
         }
         continue;
       }
       const rp = this.remotePlayers.get(ps.id);
       if (rp) {
-        rp.applyNetworkState(ps.x, ps.y, ps.z, ps.yaw, ps.pitch, ps.crouching, ps.weaponSlot, ps.hp, ps.shield, ps.alive);
+        rp.applyNetworkState(
+          ps.x,
+          ps.y,
+          ps.z,
+          ps.yaw,
+          ps.pitch,
+          ps.crouching,
+          ps.weaponSlot,
+          ps.hp,
+          ps.shield,
+          ps.alive,
+          ps.spawnShield ?? 0
+        );
       }
     }
   }
@@ -1510,7 +1543,8 @@ class SunfireGame {
   ): void {
     if (!this.mp.isHost || !this.mp.lobbyState || !this.roundActive) return;
     const victimState = this.hostLivePlayers.get(victimId);
-    if (!victimState || !victimState.alive) return;
+    // 3-second Respawn Invulnerability Shield: ZERO gun OR utility damage while active!
+    if (!victimState || !victimState.alive || victimState.spawnShield > 0) return;
 
     const attackerLobby = this.mp.lobbyState.players.find((p) => p.id === attackerId);
     const victimLobby = this.mp.lobbyState.players.find((p) => p.id === victimId);
@@ -1898,7 +1932,7 @@ class SunfireGame {
 
     for (const p of this.mp.lobbyState.players) {
       const st = this.hostLivePlayers.get(p.id);
-      if (!st || !st.alive) continue;
+      if (!st || !st.alive || st.spawnShield > 0) continue;
       // No friendly fire on teammates (owner can still take reduced self-blast damage if too close)
       if (ownerLobby && p.team === ownerLobby.team && p.id !== ownerId) continue;
 
@@ -2267,26 +2301,33 @@ class SunfireGame {
         const rpId = hit.object.userData.remotePlayerId as string | undefined;
         const rp = rpId ? this.remotePlayers.get(rpId) : undefined;
         if (rp && rp.alive) {
-          const zone = (hit.object.userData.hitZone as 'head' | 'body' | 'leg') || 'body';
-          const isHead = zone === 'head';
-          const dmg =
-            zone === 'head'
-              ? shot.weapon.damageHead
-              : zone === 'leg'
-              ? shot.weapon.damageLeg
-              : shot.weapon.damageBody;
+          if (rp.spawnShield > 0) {
+            // Target is protected by 3s Respawn Invulnerability Shield -> bounce sparks off shield, ZERO damage!
+            this.weapons.spawnImpact(hit.point, shot.direction.clone().negate(), false, false);
+            this.weapons.spawnPulseLight(hit.point, 0x38eeff, 12, 0.08, 6);
+            this.hud.showToast(`🛡 ${rp.name} SPAWN SHIELDED`, 'warn', 0.9);
+          } else {
+            const zone = (hit.object.userData.hitZone as 'head' | 'body' | 'leg') || 'body';
+            const isHead = zone === 'head';
+            const dmg =
+              zone === 'head'
+                ? shot.weapon.damageHead
+                : zone === 'leg'
+                ? shot.weapon.damageLeg
+                : shot.weapon.damageBody;
 
-          rp.spottedTimer = 4.0;
-          rp.triggerHitFlash();
-          this.weapons.spawnImpact(hit.point, shot.direction.clone().negate(), true, isHead, false);
-          this.projectWallBloodSplatter(hit.point, shot.direction, isHead ? 0.96 : 0.68);
-          this.sound.playHit(isHead);
-          this.hud.showHitmarker(isHead);
+            rp.spottedTimer = 4.0;
+            rp.triggerHitFlash();
+            this.weapons.spawnImpact(hit.point, shot.direction.clone().negate(), true, isHead, false);
+            this.projectWallBloodSplatter(hit.point, shot.direction, isHead ? 0.96 : 0.68);
+            this.sound.playHit(isHead);
+            this.hud.showHitmarker(isHead);
 
-          hitTargetId = rp.id;
-          hitZone = zone;
-          hitPoint = hit.point.clone();
-          hitDamage = dmg;
+            hitTargetId = rp.id;
+            hitZone = zone;
+            hitPoint = hit.point.clone();
+            hitDamage = dmg;
+          }
         }
       } else if (wallPoint && wallNormal) {
         endPoint.copy(wallPoint);
@@ -2723,6 +2764,18 @@ class SunfireGame {
 
       this.updateTdmHealing(dt);
 
+      // Tick 3-second Respawn Invulnerability Shield on local player & authoritatively on Host for all players!
+      if (this.localSpawnShield > 0) {
+        this.localSpawnShield = this.player.alive ? Math.max(0, this.localSpawnShield - dt) : 0;
+      }
+      if (this.mp.isHost) {
+        for (const st of this.hostLivePlayers.values()) {
+          if (st.spawnShield > 0) {
+            st.spawnShield = st.alive ? Math.max(0, st.spawnShield - dt) : 0;
+          }
+        }
+      }
+
       this.weapons.setVisible(this.player.alive);
       this.weapons.update(
         dt,
@@ -2743,11 +2796,16 @@ class SunfireGame {
         [],
         playerEye,
         camFwd,
-        (strength) => this.hud.triggerFlash(strength),
+        (strength) => {
+          // 3-second Spawn Shield blocks Flashbang blinding too!
+          if (this.localSpawnShield <= 0) {
+            this.hud.triggerFlash(strength);
+          }
+        },
         (pos) => this.weapons.spawnExplosion(pos, 1.15, 0xffb838),
         (ev) => {
           this.weapons.spawnExplosion(ev.pos, 2.35, 0xff5a18);
-          if (ev.playerShake > 0) this.player.addShake(ev.playerShake);
+          if (ev.playerShake > 0 && this.localSpawnShield <= 0) this.player.addShake(ev.playerShake);
           if (this.mp.isHost) {
             this.handleHostTdmFragDetonation(ev.pos, ev.ownerId ?? this.mp.localPlayerId);
           }
@@ -2837,6 +2895,7 @@ class SunfireGame {
         );
         this.hud.updateAbilities(this.abilities.charges);
         this.hud.updateMedkits(this.tdmBandages, this.tdmMedkits, this.activeHeal?.kind ?? null);
+        this.hud.updateSpawnShield(this.localSpawnShield, TDM_SPAWN_SHIELD_DURATION);
         this.hud.updateLootPrompt(
           closestDrop ? closestDrop.victimName : null,
           closestDrop ? this.formatUtilitySummary(closestDrop.contents) : []
@@ -2869,11 +2928,12 @@ class SunfireGame {
         for (const rp of this.remotePlayers.values()) {
           if (!rp.alive) continue;
           const isTeammate = rp.team === this.tdmLocalTeam;
+          const label = rp.spawnShield > 0 ? `🛡 ${rp.name}` : rp.name;
           if (isTeammate) {
             extraDots.push({ pos: rp.pos, color: '#36f0df' });
             nameplates.push({
               id: rp.id,
-              name: rp.name,
+              name: label,
               team: rp.team,
               hpRatio: rp.hp / Math.max(1, rp.maxHp),
               headWorld: rp.getHeadWorldPosition(this.tmpHeadPos.clone()),
@@ -2885,7 +2945,7 @@ class SunfireGame {
             if (rp.losVisible) {
               nameplates.push({
                 id: rp.id,
-                name: rp.name,
+                name: label,
                 team: rp.team,
                 hpRatio: rp.hp / Math.max(1, rp.maxHp),
                 headWorld: rp.getHeadWorldPosition(this.tmpHeadPos.clone()),

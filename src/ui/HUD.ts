@@ -56,6 +56,10 @@ export class HUD {
   private elFxFlash = document.getElementById('fx-flash')!;
   private elFxDmg = document.getElementById('fx-damage-vignette')!;
   private elFxStim = document.getElementById('fx-stim-vignette')!;
+  private elFxSpawnShield = document.getElementById('fx-spawn-shield')!;
+  private elSpawnShieldBadge = document.getElementById('spawn-shield-badge')!;
+  private elSpawnShieldTimer = document.getElementById('spawn-shield-timer')!;
+  private elSpawnShieldFill = document.getElementById('spawn-shield-fill')!;
   private dmgArcCanvas = document.getElementById('fx-damage-arcs') as HTMLCanvasElement;
   private dmgArcCtx = this.dmgArcCanvas.getContext('2d')!;
 
@@ -105,6 +109,7 @@ export class HUD {
   private lastMedKey = '';
   private lastHealKey = '';
   private lastLootKey = '';
+  private lastSpawnShieldKey = '';
   private lastZone = '';
   private lastScoreKey = '';
   private lastFlashStr = '';
@@ -275,6 +280,7 @@ export class HUD {
     if (!visible) {
       this.elHealWrap.classList.add('hidden');
       this.elLootPrompt.classList.add('hidden');
+      this.updateSpawnShield(0, 3);
     }
   }
 
@@ -333,6 +339,27 @@ export class HUD {
     this.elPickupToast.classList.toggle('warn', variant === 'warn');
     this.elPickupToast.classList.remove('hidden');
     this.toastTimer = duration;
+  }
+
+  public updateSpawnShield(remainingSec: number, maxSec: number): void {
+    if (remainingSec <= 0.01) {
+      if (this.lastSpawnShieldKey !== '') {
+        this.lastSpawnShieldKey = '';
+        this.elSpawnShieldBadge.classList.add('hidden');
+        this.elFxSpawnShield.style.opacity = '0';
+      }
+      return;
+    }
+    const rem = remainingSec.toFixed(1);
+    const pct = Math.min(100, Math.max(0, Math.round((remainingSec / Math.max(0.01, maxSec)) * 200) / 2));
+    const key = `${rem}:${pct}`;
+    if (key === this.lastSpawnShieldKey) return;
+    this.lastSpawnShieldKey = key;
+
+    this.elSpawnShieldBadge.classList.remove('hidden');
+    this.elSpawnShieldTimer.textContent = `${rem}s`;
+    this.elSpawnShieldFill.style.width = `${pct}%`;
+    this.elFxSpawnShield.style.opacity = remainingSec < 0.6 ? (remainingSec / 0.6).toFixed(2) : '1';
   }
 
   public updateScoreboard(

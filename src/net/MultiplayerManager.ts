@@ -30,6 +30,7 @@ export interface SnapshotPlayerState extends PlayerPoseInput {
   hp: number;
   shield: number;
   alive: boolean;
+  spawnShield: number;
 }
 
 export interface WorldSnapshot {

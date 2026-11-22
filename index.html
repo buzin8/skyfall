@@ -18,6 +18,7 @@
     <div id="fx-flash"></div>
     <div id="fx-damage-vignette"></div>
     <div id="fx-stim-vignette"></div>
+    <div id="fx-spawn-shield"></div>
     <canvas id="fx-damage-arcs" width="420" height="420"></canvas>
 
     <!-- In-Game Minimal Tactical HUD -->
@@ -50,6 +51,17 @@
         <div class="team-block enemy">
           <div class="team-score" id="score-enemy">0</div>
           <div class="agent-pips" id="enemy-pips"></div>
+        </div>
+      </div>
+
+      <!-- 3-Second TDM Respawn Invulnerability Shield Indicator -->
+      <div id="spawn-shield-badge" class="hidden">
+        <div class="ss-head">
+          <span>🛡 SPAWN SHIELD</span>
+          <span id="spawn-shield-timer">3.0s</span>
+        </div>
+        <div class="ss-track">
+          <div id="spawn-shield-fill"></div>
         </div>
       </div>
 

@@ -35,6 +35,11 @@ export class RemotePlayer {
   public weaponSlot = 0;
   public spottedTimer = 0;
   public losVisible = false;
+  public spawnShield = 0;
+
+  private shieldAuraGroup: THREE.Group;
+  private shieldInnerMat: THREE.MeshBasicMaterial;
+  private shieldWireMat: THREE.MeshBasicMaterial;
 
   private netVel = new THREE.Vector3();
   private lastNetTime = performance.now();
@@ -83,11 +88,41 @@ export class RemotePlayer {
       hm.userData.remotePlayerId = id;
       hm.userData.agentId = undefined;
     }
+
+    // Glowing translucent 3-second respawn invulnerability energy shield dome
+    this.shieldAuraGroup = new THREE.Group();
+    this.shieldAuraGroup.position.set(0, 1.0, 0);
+    const auraGeo = new THREE.IcosahedronGeometry(0.66, 1);
+    const auraCol = team === 'blue' ? 0x38eeff : 0xffb84a;
+    this.shieldInnerMat = new THREE.MeshBasicMaterial({
+      color: auraCol,
+      transparent: true,
+      opacity: 0.2,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    this.shieldWireMat = new THREE.MeshBasicMaterial({
+      color: 0xb8f8ff,
+      transparent: true,
+      opacity: 0.48,
+      wireframe: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const innerShell = new THREE.Mesh(auraGeo, this.shieldInnerMat);
+    innerShell.scale.set(0.84, 1.54, 0.84);
+    const wireShell = new THREE.Mesh(auraGeo, this.shieldWireMat);
+    wireShell.scale.set(0.87, 1.58, 0.87);
+    this.shieldAuraGroup.add(innerShell, wireShell);
+    this.shieldAuraGroup.visible = false;
+    this.rig.root.add(this.shieldAuraGroup);
+
     scene.add(this.rig.root);
     this.respawn(spawnPos, cameraYaw);
   }
 
-  public respawn(spawnPos: THREE.Vector3, cameraYaw: number): void {
+  public respawn(spawnPos: THREE.Vector3, cameraYaw: number, spawnShieldSec = 3.0): void {
     this.pos.copy(spawnPos);
     this.targetPos.copy(spawnPos);
     this.yaw = cameraYaw + Math.PI;
@@ -97,6 +132,7 @@ export class RemotePlayer {
     this.maxHp = 100;
     this.shield = 50;
     this.alive = true;
+    this.spawnShield = spawnShieldSec;
     this.crouching = false;
     this.crouchAmount = 0;
     this.muzzleFlashTimer = 0;
@@ -148,7 +184,8 @@ export class RemotePlayer {
     weaponSlot: number,
     hp: number,
     shield: number,
-    alive: boolean
+    alive: boolean,
+    spawnShield = 0
   ): void {
     // Zero-allocation smooth position & velocity-assisted prediction (silky 60 FPS even over Wi-Fi!)
     const dx = x - this.targetPos.x;
@@ -185,11 +222,12 @@ export class RemotePlayer {
     this.weaponSlot = weaponSlot;
     this.hp = hp;
     this.shield = shield;
+    this.spawnShield = spawnShield;
 
     if (this.alive && !alive) {
       this.triggerDeath(undefined, false);
     } else if (!this.alive && alive) {
-      this.respawn(this.targetPos, cameraYaw);
+      this.respawn(this.targetPos, cameraYaw, spawnShield);
     }
   }
 
@@ -268,8 +306,25 @@ export class RemotePlayer {
     }
 
     if (!this.alive) {
+      this.spawnShield = 0;
+      this.shieldAuraGroup.visible = false;
       this.updateDeathRagdoll(dt);
       return;
+    }
+
+    if (this.spawnShield > 0) {
+      this.spawnShield = Math.max(0, this.spawnShield - dt);
+      this.shieldAuraGroup.visible = this.spawnShield > 0;
+      if (this.shieldAuraGroup.visible) {
+        const fade = Math.min(1, this.spawnShield / 0.6);
+        const pulse = 0.78 + 0.22 * Math.sin(this.idlePhase * 5.0);
+        this.shieldInnerMat.opacity = 0.2 * fade * pulse;
+        this.shieldWireMat.opacity = 0.48 * fade * pulse;
+        this.shieldAuraGroup.rotation.y += dt * 1.4;
+        this.shieldAuraGroup.position.y = THREE.MathUtils.lerp(1.0, 0.78, this.crouchAmount);
+      }
+    } else if (this.shieldAuraGroup.visible) {
+      this.shieldAuraGroup.visible = false;
     }
 
     const prevX = this.pos.x;
