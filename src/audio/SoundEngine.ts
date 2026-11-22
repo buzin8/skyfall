@@ -566,4 +566,82 @@ export class SoundEngine {
       osc.stop(now + i * 0.11 + 0.55);
     });
   }
+
+  public playHealStart(isMedkit: boolean): void {
+    if (!this.ctx || !this.masterGain || !this.noiseBuffer) return;
+    const now = this.ctx.currentTime;
+
+    // Tactile bandage wrap / medkit zipper sound
+    const rustle = this.ctx.createBufferSource();
+    rustle.buffer = this.noiseBuffer;
+    const bp = this.ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(isMedkit ? 1400 : 2100, now);
+    bp.frequency.linearRampToValueAtTime(isMedkit ? 900 : 1450, now + 0.24);
+    bp.Q.value = 1.4;
+
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.linearRampToValueAtTime(0.16, now + 0.04);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+
+    rustle.connect(bp);
+    bp.connect(gain);
+    gain.connect(this.masterGain);
+    rustle.start(now);
+    rustle.stop(now + 0.3);
+
+    const tone = this.ctx.createOscillator();
+    tone.type = 'sine';
+    tone.frequency.setValueAtTime(isMedkit ? 440 : 520, now);
+    tone.frequency.exponentialRampToValueAtTime(isMedkit ? 540 : 620, now + 0.14);
+    const tg = this.ctx.createGain();
+    tg.gain.setValueAtTime(0.08, now);
+    tg.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
+    tone.connect(tg);
+    tg.connect(this.masterGain);
+    tone.start(now);
+    tone.stop(now + 0.18);
+  }
+
+  public playHealComplete(isMedkit: boolean): void {
+    if (!this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const notes = isMedkit ? [523.25, 659.25, 783.99, 1046.5] : [587.33, 783.99];
+    notes.forEach((freq, idx) => {
+      if (!this.ctx || !this.masterGain) return;
+      const t = now + idx * 0.07;
+      const osc = this.ctx.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(freq, t);
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.001, t);
+      g.gain.linearRampToValueAtTime(0.17, t + 0.015);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(t);
+      osc.stop(t + 0.3);
+    });
+  }
+
+  public playPickup(): void {
+    if (!this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const freqs = [460, 690, 920];
+    freqs.forEach((f, idx) => {
+      if (!this.ctx || !this.masterGain) return;
+      const t = now + idx * 0.045;
+      const osc = this.ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(f, t);
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.14, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(t);
+      osc.stop(t + 0.14);
+    });
+  }
 }

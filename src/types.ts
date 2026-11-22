@@ -3,8 +3,29 @@ import * as THREE from 'three';
 export type GameMode = 'tactical' | 'clutch' | 'skirmish';
 export type Difficulty = 'casual' | 'tactical' | 'radiant';
 export type Team = 'ally' | 'enemy';
+export type LobbyTeam = 'blue' | 'red';
 export type MapId = 'factory' | 'foundry';
 export type WeaponId = 'vandal' | 'scarl';
+
+export const MAX_PLAYERS_PER_TEAM = 3;
+export const MIN_PLAYERS_PER_TEAM = 1;
+
+export interface LobbyPlayer {
+  id: string;
+  name: string;
+  team: LobbyTeam;
+  isHost: boolean;
+  slotIndex: number; // 0..2 within team
+  kills: number;
+  deaths: number;
+}
+
+export interface LobbyState {
+  code: string;
+  map: MapId;
+  inMatch: boolean;
+  players: LobbyPlayer[];
+}
 
 export interface AABB {
   minX: number;

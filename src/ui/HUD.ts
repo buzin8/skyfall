@@ -6,6 +6,7 @@ export interface NameplateTarget {
   name: string;
   hpRatio: number;
   headWorld: THREE.Vector3;
+  team?: 'blue' | 'red' | 'loot';
 }
 
 export interface DamageHistoryEntry {
@@ -61,18 +62,31 @@ export class HUD {
   private elAbC = document.getElementById('ab-c')!;
   private elAbQ = document.getElementById('ab-q')!;
   private elAbE = document.getElementById('ab-e')!;
+  private elAbB = document.getElementById('ab-b')!;
+  private elAbM = document.getElementById('ab-m')!;
   private elAbCCharges = document.getElementById('ab-c-charges')!;
   private elAbQCharges = document.getElementById('ab-q-charges')!;
   private elAbECharges = document.getElementById('ab-e-charges')!;
+  private elAbBCharges = document.getElementById('ab-b-charges')!;
+  private elAbMCharges = document.getElementById('ab-m-charges')!;
+  private elHealWrap = document.getElementById('heal-progress-wrap')!;
+  private elHealLabel = document.getElementById('heal-label')!;
+  private elHealTimer = document.getElementById('heal-timer')!;
+  private elHealFill = document.getElementById('heal-fill')!;
+  private elLootPrompt = document.getElementById('loot-prompt')!;
+  private elLootTitle = document.getElementById('loot-prompt-title')!;
+  private elLootItems = document.getElementById('loot-prompt-items')!;
+  private elPickupToast = document.getElementById('pickup-toast')!;
   private elNameplates = document.getElementById('nameplates-layer')!;
   private elDamageHistory = document.getElementById('damage-history')!;
   private elDamageHistoryList = document.getElementById('dh-list')!;
-  private nameplateEls = new Map<string, { root: HTMLDivElement; hpFill: HTMLDivElement }>();
+  private nameplateEls = new Map<string, { root: HTMLDivElement; tag: HTMLDivElement; hpFill: HTMLDivElement }>();
   private projVec = new THREE.Vector3();
 
   private hitmarkerTimer = 0;
   private bannerTimer = 0;
   private killEmblemTimer = 0;
+  private toastTimer = 0;
   private flashOpacity = 0;
   private damageVignette = 0;
   private damageArcs: DamageArc[] = [];
@@ -88,6 +102,9 @@ export class HUD {
   private lastRes = -99;
   private lastReloading = false;
   private lastAbKey = '';
+  private lastMedKey = '';
+  private lastHealKey = '';
+  private lastLootKey = '';
   private lastZone = '';
   private lastScoreKey = '';
   private lastFlashStr = '';
@@ -243,9 +260,79 @@ export class HUD {
     this.elAbQ.classList.toggle('depleted', charges.flash <= 0);
     this.elAbE.classList.toggle('depleted', charges.smoke <= 0);
 
-    this.elAbCCharges.textContent = '●'.repeat(charges.frag) || '○';
-    this.elAbQCharges.textContent = '●'.repeat(charges.flash) || '○';
-    this.elAbECharges.textContent = '●'.repeat(charges.smoke) || '○';
+    const fmt = (n: number) => (n <= 0 ? '○' : n <= 4 ? '●'.repeat(n) : `×${n}`);
+    this.elAbCCharges.textContent = fmt(charges.frag);
+    this.elAbQCharges.textContent = fmt(charges.flash);
+    this.elAbECharges.textContent = fmt(charges.smoke);
+  }
+
+  public setTdmMedSlotsVisible(visible: boolean): void {
+    this.elAbB.classList.toggle('hidden', !visible);
+    this.elAbM.classList.toggle('hidden', !visible);
+    document.querySelectorAll<HTMLElement>('.tdm-ctrl-hint').forEach((el) => {
+      el.classList.toggle('hidden', !visible);
+    });
+    if (!visible) {
+      this.elHealWrap.classList.add('hidden');
+      this.elLootPrompt.classList.add('hidden');
+    }
+  }
+
+  public updateMedkits(bandages: number, medkits: number, activeKind: 'bandage' | 'medkit' | null): void {
+    const key = `${bandages}:${medkits}:${activeKind ?? 'none'}`;
+    if (key === this.lastMedKey) return;
+    this.lastMedKey = key;
+
+    this.elAbB.classList.toggle('depleted', bandages <= 0);
+    this.elAbM.classList.toggle('depleted', medkits <= 0);
+    this.elAbB.classList.toggle('healing-active', activeKind === 'bandage');
+    this.elAbM.classList.toggle('healing-active', activeKind === 'medkit');
+
+    this.elAbBCharges.textContent = bandages > 0 ? `×${bandages}` : '○';
+    this.elAbMCharges.textContent = medkits > 0 ? `×${medkits}` : '○';
+  }
+
+  public updateHealProgress(kind: 'bandage' | 'medkit' | null, elapsed: number, duration: number): void {
+    if (!kind) {
+      if (this.lastHealKey !== '') {
+        this.lastHealKey = '';
+        this.elHealWrap.classList.add('hidden');
+      }
+      return;
+    }
+    const rem = Math.max(0, duration - elapsed).toFixed(1);
+    const pct = Math.min(100, Math.max(0, Math.round((elapsed / Math.max(0.01, duration)) * 200) / 2));
+    const key = `${kind}:${rem}:${pct}`;
+    if (key === this.lastHealKey) return;
+    this.lastHealKey = key;
+
+    this.elHealWrap.classList.remove('hidden');
+    this.elHealWrap.classList.toggle('medkit', kind === 'medkit');
+    this.elHealLabel.textContent =
+      kind === 'medkit' ? 'APPLYING MEDKIT (+75 HP)' : 'APPLYING BANDAGE (+25 HP)';
+    this.elHealTimer.textContent = `${rem}s`;
+    this.elHealFill.style.width = `${pct}%`;
+  }
+
+  public updateLootPrompt(victimName: string | null, items: string[]): void {
+    const key = victimName ? `${victimName}|${items.join(',')}` : '';
+    if (key === this.lastLootKey) return;
+    this.lastLootKey = key;
+
+    if (!victimName || items.length === 0) {
+      this.elLootPrompt.classList.add('hidden');
+      return;
+    }
+    this.elLootTitle.textContent = `LOOT — ${victimName}'S UTILITIES`;
+    this.elLootItems.innerHTML = items.map((t) => `<span class="loot-tag">${t}</span>`).join('');
+    this.elLootPrompt.classList.remove('hidden');
+  }
+
+  public showToast(text: string, variant: 'heal' | 'loot' | 'warn' = 'heal', duration = 2.2): void {
+    this.elPickupToast.textContent = text;
+    this.elPickupToast.classList.toggle('warn', variant === 'warn');
+    this.elPickupToast.classList.remove('hidden');
+    this.toastTimer = duration;
   }
 
   public updateScoreboard(
@@ -321,9 +408,12 @@ export class HUD {
         root.appendChild(tag);
         root.appendChild(hpWrap);
         this.elNameplates.appendChild(root);
-        entry = { root, hpFill };
+        entry = { root, tag, hpFill };
         this.nameplateEls.set(t.id, entry);
       }
+      entry.tag.textContent = t.name;
+      entry.root.classList.toggle('red-team', t.team === 'red');
+      entry.root.classList.toggle('loot-tag-3d', t.team === 'loot');
 
       this.projVec.copy(t.headWorld).project(camera);
       // Hide if behind camera or far offscreen
@@ -387,6 +477,13 @@ export class HUD {
       this.killEmblemTimer -= dt;
       if (this.killEmblemTimer <= 0) {
         this.elKillEmblem.classList.add('hidden');
+      }
+    }
+
+    if (this.toastTimer > 0) {
+      this.toastTimer -= dt;
+      if (this.toastTimer <= 0) {
+        this.elPickupToast.classList.add('hidden');
       }
     }
 

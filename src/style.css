@@ -1157,6 +1157,450 @@ body {
   background: #36eeff;
 }
 
+.ally-nameplate.red-team .ally-nameplate-tag {
+  color: #ff8e9a;
+  background: rgba(42, 8, 14, 0.72);
+  border-color: rgba(255, 70, 92, 0.62);
+  box-shadow: 0 0 10px rgba(255, 52, 78, 0.28);
+}
+
+.ally-nameplate.red-team .ally-nameplate-hp-fill {
+  background: #ff445a;
+}
+
+.ally-nameplate.loot-tag-3d .ally-nameplate-tag {
+  color: #8dffda;
+  background: rgba(6, 28, 22, 0.84);
+  border-color: rgba(54, 245, 176, 0.72);
+  box-shadow: 0 0 12px rgba(42, 245, 176, 0.34);
+}
+
+.ally-nameplate.loot-tag-3d .ally-nameplate-hp {
+  display: none;
+}
+
+.tdm-loot-hint b {
+  color: #46f7ba !important;
+}
+
+/* ==================== TEAM DEATH MATCH HOSTED LOBBY ==================== */
+.pill-tdm {
+  border-color: rgba(255, 168, 48, 0.55) !important;
+  color: #ffd080 !important;
+  background: linear-gradient(135deg, rgba(255, 130, 32, 0.2), rgba(255, 58, 86, 0.18)) !important;
+}
+
+.pill-tdm:hover {
+  border-color: rgba(255, 192, 78, 0.9) !important;
+  color: #ffffff !important;
+  box-shadow: 0 0 14px rgba(255, 142, 42, 0.34);
+}
+
+#tdm-lobby-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tdm-shell {
+  position: relative;
+  z-index: 2;
+  width: min(860px, 94vw);
+  max-height: 92vh;
+  overflow-y: auto;
+  padding: 24px 26px;
+  border-radius: 10px;
+  background: rgba(10, 15, 23, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 28px 72px rgba(0, 0, 0, 0.65);
+}
+
+.tdm-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.tdm-title {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  line-height: 1;
+  color: #ffffff;
+  margin-top: 4px;
+}
+
+.tdm-error {
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  background: rgba(255, 54, 80, 0.16);
+  border: 1px solid rgba(255, 74, 96, 0.55);
+  color: #ff98a4;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+}
+
+.tdm-name-card {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(56, 224, 255, 0.32);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+
+.tdm-name-card label {
+  display: block;
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1.8px;
+  color: var(--accent-cyan);
+  margin-bottom: 8px;
+}
+
+.tdm-req {
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+#tdm-player-name,
+.tdm-code-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 11px 14px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(6, 10, 16, 0.85);
+  color: #ffffff;
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  outline: none;
+}
+
+#tdm-player-name:focus,
+.tdm-code-input:focus {
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 0 2px rgba(50, 229, 255, 0.18);
+}
+
+.tdm-entry-grid,
+.tdm-teams-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.tdm-panel {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.tdm-panel-desc {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-dim);
+  margin: 4px 0 8px;
+}
+
+.tdm-loadout-bar {
+  padding: 9px 14px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  font-size: 11.5px;
+  letter-spacing: 0.7px;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+.tdm-loadout-bar span {
+  color: var(--accent-amber);
+  font-weight: 700;
+  margin-right: 6px;
+}
+
+.tdm-loadout-bar b {
+  color: #eef5fc;
+}
+
+.tdm-room-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.tdm-code-box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.tdm-code-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.6px;
+  color: var(--text-dim);
+}
+
+#tdm-room-code {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 4px;
+  color: #46eeff;
+  background: rgba(8, 22, 36, 0.9);
+  border: 1px solid rgba(56, 232, 255, 0.5);
+  border-radius: 6px;
+  padding: 2px 12px;
+}
+
+.tdm-copy-btn {
+  padding: 7px 12px;
+  border-radius: 5px;
+  border: 1px solid rgba(56, 232, 255, 0.45);
+  background: rgba(56, 232, 255, 0.14);
+  color: #9bf4ff;
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  cursor: pointer;
+}
+
+.tdm-copy-btn:hover {
+  background: rgba(56, 232, 255, 0.28);
+  color: #ffffff;
+}
+
+.tdm-map-select {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tdm-status-wrap {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1.3px;
+  color: #b8cadb;
+}
+
+.tdm-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #ffb838;
+  box-shadow: 0 0 8px #ffb838;
+}
+
+.tdm-dot.ready {
+  background: #22f09a;
+  box-shadow: 0 0 10px #22f09a;
+}
+
+.tdm-team-card {
+  border-radius: 8px;
+  padding: 15px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: rgba(12, 18, 28, 0.78);
+}
+
+.tdm-team-card.blue {
+  border: 1px solid rgba(64, 184, 255, 0.48);
+  box-shadow: inset 0 0 24px rgba(42, 168, 255, 0.08);
+}
+
+.tdm-team-card.red {
+  border: 1px solid rgba(255, 68, 92, 0.48);
+  box-shadow: inset 0 0 24px rgba(255, 52, 78, 0.08);
+}
+
+.tdm-team-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.tdm-team-title {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 2px;
+}
+
+.tdm-team-card.blue .tdm-team-title {
+  color: #5ee6ff;
+}
+
+.tdm-team-card.red .tdm-team-title {
+  color: #ff667a;
+}
+
+.tdm-team-sub {
+  font-size: 10px;
+  letter-spacing: 1.2px;
+  color: var(--text-dim);
+}
+
+.tdm-team-count {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 20px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.tdm-slot-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tdm-slot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  color: #ffffff;
+}
+
+.tdm-slot.empty {
+  color: rgba(180, 198, 218, 0.36);
+  background: rgba(255, 255, 255, 0.02);
+  border-style: dashed;
+}
+
+.tdm-slot-badges {
+  display: flex;
+  gap: 5px;
+}
+
+.tdm-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  letter-spacing: 1px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #e6f2ff;
+}
+
+.tdm-badge.host {
+  background: rgba(255, 174, 48, 0.24);
+  color: #ffd37a;
+}
+
+.tdm-badge.you {
+  background: rgba(50, 229, 255, 0.22);
+  color: #78f2ff;
+}
+
+.tdm-team-btn {
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 1.6px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.15s ease;
+}
+
+.tdm-team-btn.blue {
+  background: rgba(42, 168, 255, 0.2);
+  border-color: rgba(74, 206, 255, 0.55);
+  color: #8eeeff;
+}
+
+.tdm-team-btn.blue:hover:not(:disabled) {
+  background: rgba(42, 168, 255, 0.36);
+  color: #ffffff;
+}
+
+.tdm-team-btn.red {
+  background: rgba(255, 56, 82, 0.2);
+  border-color: rgba(255, 86, 108, 0.55);
+  color: #ff94a2;
+}
+
+.tdm-team-btn.red:hover:not(:disabled) {
+  background: rgba(255, 56, 82, 0.36);
+  color: #ffffff;
+}
+
+.tdm-team-btn:disabled,
+#btn-tdm-start:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.tdm-room-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.tdm-ready-hint {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  color: #ffc86b;
+}
+
+.tdm-ready-hint.ready {
+  color: #36f2a6;
+}
+
+.tdm-footer-actions {
+  display: flex;
+  gap: 10px;
+}
+
+@media (max-width: 720px) {
+  .tdm-entry-grid,
+  .tdm-teams-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 #damage-history {
   position: absolute;
   left: 24px;
@@ -1213,6 +1657,170 @@ body {
 .dh-hits {
   color: var(--text-dim);
   font-size: 11px;
+}
+
+/* ==================== TDM BANDAGES, MEDKIT & LOOT PICKUP HUD ==================== */
+.ability-slot.tdm-med-slot.healing-active {
+  border-color: rgba(54, 245, 176, 0.88);
+  background: rgba(20, 74, 58, 0.42);
+  box-shadow: 0 0 14px rgba(54, 245, 176, 0.34);
+}
+
+#heal-progress-wrap {
+  position: absolute;
+  top: calc(50% + 52px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 248px;
+  padding: 9px 12px;
+  border-radius: 7px;
+  background: rgba(8, 13, 20, 0.82);
+  border: 1px solid rgba(54, 245, 176, 0.55);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
+
+#heal-progress-wrap.medkit {
+  border-color: rgba(255, 82, 104, 0.65);
+}
+
+.heal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  color: #dffef2;
+  margin-bottom: 6px;
+}
+
+#heal-timer {
+  color: #36f5b0;
+  font-variant-numeric: tabular-nums;
+}
+
+#heal-progress-wrap.medkit #heal-timer {
+  color: #ff6b80;
+}
+
+.heal-track {
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+#heal-fill {
+  width: 0%;
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #1de09e, #5effc8);
+}
+
+#heal-progress-wrap.medkit #heal-fill {
+  background: linear-gradient(90deg, #ff3d58, #ff7a8d);
+}
+
+.heal-hint {
+  margin-top: 5px;
+  text-align: center;
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1.4px;
+  color: rgba(220, 232, 245, 0.64);
+}
+
+#loot-prompt {
+  position: fixed;
+  bottom: 126px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 9px 15px;
+  border-radius: 8px;
+  background: rgba(9, 15, 22, 0.84);
+  border: 1px solid rgba(54, 245, 176, 0.52);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  z-index: 24;
+  text-align: center;
+}
+
+.loot-prompt-top {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  color: #ffffff;
+}
+
+.loot-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  background: #36f5b0;
+  color: #061412;
+  font-size: 13px;
+  font-weight: 800;
+  box-shadow: 0 0 10px rgba(54, 245, 176, 0.45);
+}
+
+#loot-prompt-items {
+  margin-top: 5px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+
+.loot-tag {
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.9px;
+  color: #bfffe8;
+}
+
+#pickup-toast {
+  position: fixed;
+  top: 96px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 7px 16px;
+  border-radius: 6px;
+  background: rgba(10, 26, 22, 0.88);
+  border: 1px solid rgba(54, 245, 176, 0.65);
+  color: #b8ffe6;
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  z-index: 26;
+}
+
+#pickup-toast.warn {
+  background: rgba(40, 18, 12, 0.88);
+  border-color: rgba(255, 152, 62, 0.65);
+  color: #ffd3a0;
 }
 
 @media (max-width: 760px) {

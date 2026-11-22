@@ -14,10 +14,12 @@ export interface FragDetonationEvent {
   hits: FragHitInfo[];
   playerDamage: number;
   playerShake: number;
+  ownerId?: string;
 }
 
 interface Projectile {
   kind: 'frag' | 'flash' | 'smoke';
+  ownerId?: string;
   object: THREE.Object3D;
   light: THREE.PointLight;
   blinkMat?: THREE.MeshBasicMaterial;
@@ -90,9 +92,11 @@ export class AbilitySystem {
    * Throws a physical M67-style tactical frag grenade (Key C).
    * Bounces around corners off walls & floor and detonates after 1.55s with lethal blast radius!
    */
-  public throwFrag(origin: THREE.Vector3, dir: THREE.Vector3): boolean {
-    if (this.charges.frag <= 0) return false;
-    this.charges.frag -= 1;
+  public throwFrag(origin: THREE.Vector3, dir: THREE.Vector3, ownerId = 'local', consumeCharge = true): boolean {
+    if (consumeCharge) {
+      if (this.charges.frag <= 0) return false;
+      this.charges.frag -= 1;
+    }
     this.sound.playGrenadeThrow();
 
     const fragGroup = new THREE.Group();
@@ -156,6 +160,7 @@ export class AbilitySystem {
 
     this.projectiles.push({
       kind: 'frag',
+      ownerId,
       object: fragGroup,
       light,
       blinkMat,
@@ -168,9 +173,11 @@ export class AbilitySystem {
     return true;
   }
 
-  public throwFlash(origin: THREE.Vector3, dir: THREE.Vector3): boolean {
-    if (this.charges.flash <= 0) return false;
-    this.charges.flash -= 1;
+  public throwFlash(origin: THREE.Vector3, dir: THREE.Vector3, ownerId = 'local', consumeCharge = true): boolean {
+    if (consumeCharge) {
+      if (this.charges.flash <= 0) return false;
+      this.charges.flash -= 1;
+    }
     this.sound.playGrenadeThrow();
 
     const mesh = new THREE.Mesh(
@@ -196,6 +203,7 @@ export class AbilitySystem {
 
     this.projectiles.push({
       kind: 'flash',
+      ownerId,
       object: mesh,
       light,
       pos: mesh.position.clone(),
@@ -207,9 +215,11 @@ export class AbilitySystem {
     return true;
   }
 
-  public throwSmoke(origin: THREE.Vector3, dir: THREE.Vector3): boolean {
-    if (this.charges.smoke <= 0) return false;
-    this.charges.smoke -= 1;
+  public throwSmoke(origin: THREE.Vector3, dir: THREE.Vector3, ownerId = 'local', consumeCharge = true): boolean {
+    if (consumeCharge) {
+      if (this.charges.smoke <= 0) return false;
+      this.charges.smoke -= 1;
+    }
     this.sound.playGrenadeThrow();
 
     const mesh = new THREE.Mesh(
@@ -235,6 +245,7 @@ export class AbilitySystem {
 
     this.projectiles.push({
       kind: 'smoke',
+      ownerId,
       object: mesh,
       light,
       pos: mesh.position.clone(),
@@ -244,6 +255,12 @@ export class AbilitySystem {
       bounceCooldown: 0,
     });
     return true;
+  }
+
+  public spawnRemoteThrow(kind: 'frag' | 'flash' | 'smoke', origin: THREE.Vector3, dir: THREE.Vector3, ownerId: string): void {
+    if (kind === 'frag') this.throwFrag(origin, dir, ownerId, false);
+    else if (kind === 'flash') this.throwFlash(origin, dir, ownerId, false);
+    else this.throwSmoke(origin, dir, ownerId, false);
   }
 
   public update(
@@ -364,6 +381,7 @@ export class AbilitySystem {
       if (shouldPop) {
         if (p.kind === 'frag') {
           const ev = this.detonateFrag(p.pos, levelMeshes, agents, playerEye);
+          ev.ownerId = p.ownerId;
           onFragDetonate?.(ev);
         } else if (p.kind === 'flash') {
           this.detonateFlash(p.pos, levelMeshes, agents, playerEye, cameraForward, onPlayerFlashed);

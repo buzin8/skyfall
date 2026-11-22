@@ -82,7 +82,8 @@ export class Minimap {
     playerPos: THREE.Vector3,
     playerYaw: number,
     agents: TacticalAgent[],
-    smokes: SmokeCloud[]
+    smokes: SmokeCloud[],
+    extraDots?: Array<{ pos: THREE.Vector3; color: string }>
   ): void {
     // Throttle radar redraw to ~25 Hz (super smooth while slashing 2D canvas CPU work)
     const now = performance.now();
@@ -117,6 +118,19 @@ export class Minimap {
       ctx.strokeStyle = '#090e15';
       ctx.lineWidth = 1.4;
       ctx.stroke();
+    }
+
+    if (extraDots) {
+      for (const d of extraDots) {
+        const [dx, dz] = this.toMap(d.pos.x, d.pos.z);
+        ctx.fillStyle = d.color;
+        ctx.beginPath();
+        ctx.arc(dx, dz, 4.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#090e15';
+        ctx.lineWidth = 1.4;
+        ctx.stroke();
+      }
     }
 
     const [px, pz] = this.toMap(playerPos.x, playerPos.z);

@@ -4,7 +4,15 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
-import { Difficulty, GameMode, GameSettings, MapId } from './types';
+import {
+  Difficulty,
+  GameMode,
+  GameSettings,
+  LobbyState,
+  LobbyTeam,
+  MAX_PLAYERS_PER_TEAM,
+  MapId,
+} from './types';
 import { SoundEngine } from './audio/SoundEngine';
 import { createTextureLibrary, TextureLibrary } from './textures/ProceduralTextures';
 import { BuiltLevel, LevelBuilder } from './world/LevelBuilder';
@@ -12,12 +20,42 @@ import { PlayerController } from './player/PlayerController';
 import { WeaponSystem } from './weapons/WeaponSystem';
 import { preloadSoldierTemplate } from './entities/AgentModel';
 import { AgentFireEvent, TacticalAgent, hasClearSight } from './entities/AgentAI';
+import { RemotePlayer } from './entities/RemotePlayer';
+import { LootDrop } from './entities/LootDrop';
+import {
+  MatchEndPayload,
+  MultiplayerManager,
+  NetDamagePayload,
+  NetHealPayload,
+  NetKillPayload,
+  NetLootPickupPayload,
+  NetLootSpawnPayload,
+  NetOrdnancePayload,
+  NetShotPayload,
+  PlayerPoseInput,
+  RoundEndPayload,
+  RoundSpawnAssignment,
+  RoundStartPayload,
+  SnapshotPlayerState,
+  UtilityBundle,
+  WorldSnapshot,
+  sanitizePlayerName,
+} from './net/MultiplayerManager';
 import { AbilitySystem } from './abilities/AbilitySystem';
 import { Minimap } from './ui/Minimap';
 import { DamageHistoryEntry, HUD, NameplateTarget } from './ui/HUD';
 
 const ROUNDS_TO_WIN = 5;
 const ROUND_DURATION = 90;
+
+// Team Death Match exclusive medical & utility-looting constants
+const TDM_BANDAGE_START = 4;
+const TDM_BANDAGE_HEAL = 25;
+const TDM_BANDAGE_TIME = 5.0;
+const TDM_MEDKIT_START = 1;
+const TDM_MEDKIT_HEAL = 75;
+const TDM_MEDKIT_TIME = 10.0;
+const TDM_LOOT_PICKUP_RANGE = 3.4;
 
 /**
  * Generates a dark moody industrial PMREM reflection map with cyan overhead strips,
@@ -145,9 +183,30 @@ class SunfireGame {
   private hud = new HUD();
 
   private agents: TacticalAgent[] = [];
+  private remotePlayers = new Map<string, RemotePlayer>();
+  private mp!: MultiplayerManager;
+  private isTdmMatch = false;
+  private tdmHostSelectedMap: MapId = 'factory';
+  private tdmLocalTeam: LobbyTeam = 'blue';
+  private hostLivePlayers = new Map<string, SnapshotPlayerState>();
+  private hostPlayerUtils = new Map<string, UtilityBundle>();
+  private hostLootDrops = new Map<string, NetLootSpawnPayload>();
+  private lootDrops = new Map<string, LootDrop>();
+  private lootDropSeq = 0;
+  private nearestLootId: string | null = null;
+  private tdmBandages = 0;
+  private tdmMedkits = 0;
+  private activeHeal: { kind: 'bandage' | 'medkit'; elapsed: number; duration: number } | null = null;
+  private localHealGraceTimer = 0;
+  private netSyncAccum = 0;
+  private tdmSlowFrameAccum = 0;
+  private tdmAdaptiveScaled = false;
+
   private raycaster = new THREE.Raycaster();
   private roundDamageHistory = new Map<string, DamageHistoryEntry>();
   private tmpHeadPos = new THREE.Vector3();
+  private tmpCamFwd = new THREE.Vector3();
+  private tmpEyePos = new THREE.Vector3();
 
   private settings: GameSettings = {
     map: 'factory',
@@ -188,6 +247,10 @@ class SunfireGame {
   private readonly targetFrameMs = 1000 / 60 - 1.5; // Smooth 60 FPS cap without skipping 60Hz vblanks!
 
   private menuOverlay = document.getElementById('menu-overlay')!;
+  private tdmOverlay = document.getElementById('tdm-lobby-overlay')!;
+  private tdmEntryView = document.getElementById('tdm-entry-view')!;
+  private tdmRoomView = document.getElementById('tdm-room-view')!;
+  private tdmErrorEl = document.getElementById('tdm-error')!;
   private matchEndOverlay = document.getElementById('match-end-overlay')!;
   private btnDeploy = document.getElementById('btn-deploy')!;
   private btnDeployLabel = document.getElementById('btn-deploy-label')!;
@@ -230,11 +293,13 @@ class SunfireGame {
     const mmCanvas = document.getElementById('minimap-canvas') as HTMLCanvasElement;
     this.minimap = new Minimap(mmCanvas, this.level.minimapRects, this.level.mapBounds);
 
-    // 6. Initial live menu showcase staging
+    // 6. Initialize Hosted Multiplayer Manager & live menu showcase staging
+    this.initMultiplayer();
     this.setupShowcaseFrame();
 
     // 7. Bind UI & controls
     this.bindMenuUI();
+    this.bindTdmLobbyUI();
     this.bindInputs();
 
     window.addEventListener('resize', () => {
@@ -311,6 +376,7 @@ class SunfireGame {
   }
 
   private switchMap(mapId: MapId): void {
+    if (this.isTdmMatch) return;
     if (this.settings.map === mapId) return;
     this.settings.map = mapId;
     this.scene.remove(this.level.group);
@@ -347,12 +413,18 @@ class SunfireGame {
   }
 
   private bindMenuUI(): void {
-    document.querySelectorAll<HTMLButtonElement>('#map-pills .pill').forEach((btn) => {
+    document.querySelectorAll<HTMLButtonElement>('#map-pills .pill[data-map]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        document.querySelectorAll('#map-pills .pill').forEach((b) => b.classList.remove('active'));
+        document.querySelectorAll('#map-pills .pill[data-map]').forEach((b) => b.classList.remove('active'));
         btn.classList.add('active');
         this.switchMap(btn.dataset.map as MapId);
       });
+    });
+
+    document.getElementById('btn-open-tdm')?.addEventListener('click', () => {
+      this.sound.unlock();
+      this.sound.setVolume(this.settings.volume);
+      this.openTdmLobbyOverlay();
     });
 
     document.querySelectorAll<HTMLButtonElement>('#mode-list .mode-btn').forEach((btn) => {
@@ -420,7 +492,9 @@ class SunfireGame {
     this.btnDeploy.addEventListener('click', () => {
       this.sound.unlock();
       this.sound.setVolume(this.settings.volume);
-      if (!this.matchStarted) {
+      if (this.isTdmMatch) {
+        this.resumeGame();
+      } else if (!this.matchStarted) {
         this.startNewMatch();
       } else {
         this.resumeGame();
@@ -429,16 +503,32 @@ class SunfireGame {
 
     this.btnRestart.addEventListener('click', () => {
       this.sound.unlock();
-      this.startNewMatch();
+      if (this.isTdmMatch) {
+        this.exitTdmMatchToMenu();
+      } else {
+        this.startNewMatch();
+      }
     });
 
     document.getElementById('btn-play-again')!.addEventListener('click', () => {
       this.matchEndOverlay.classList.add('hidden');
-      this.startNewMatch();
+      if (this.isTdmMatch && this.mp.connected) {
+        if (this.mp.isHost) {
+          this.mp.broadcastReturnToLobby();
+        } else {
+          this.showTdmLobbyRoom();
+        }
+      } else {
+        this.startNewMatch();
+      }
     });
 
     document.getElementById('btn-back-menu')!.addEventListener('click', () => {
       this.matchEndOverlay.classList.add('hidden');
+      if (this.isTdmMatch) {
+        this.exitTdmMatchToMenu();
+        return;
+      }
       this.matchStarted = false;
       this.paused = true;
       this.roundActive = false;
@@ -465,9 +555,16 @@ class SunfireGame {
         Promise.resolve(this.renderer.domElement.requestPointerLock?.()).catch(() => {});
       }
       if (e.button === 0) {
+        // BGMI-style: pressing Fire immediately stops applying Bandage/Medkit (restarts fresh when B/M pressed again!)
+        if (this.activeHeal) {
+          this.cancelActiveHeal(true);
+        }
         this.fireHeld = true;
         this.fireJustPressed = true;
       } else if (e.button === 2) {
+        if (this.activeHeal) {
+          this.cancelActiveHeal(false);
+        }
         this.adsHeld = true;
       }
     });
@@ -500,24 +597,66 @@ class SunfireGame {
 
       if (!this.player.alive) return;
 
-      if (e.code === 'Digit1') this.weapons.selectSlot(0);
-      else if (e.code === 'Digit2') this.weapons.selectSlot(1);
-      else if (e.code === 'KeyR') this.weapons.startReload();
-      else if (e.code === 'KeyQ') {
+      if (e.code === 'Digit1') {
+        if (this.activeHeal) this.cancelActiveHeal(false);
+        this.weapons.selectSlot(0);
+      } else if (e.code === 'Digit2') {
+        if (this.activeHeal) this.cancelActiveHeal(false);
+        this.weapons.selectSlot(1);
+      } else if (e.code === 'KeyR') {
+        if (this.activeHeal) this.cancelActiveHeal(false);
+        this.weapons.startReload();
+      } else if (e.code === 'KeyB' && this.isTdmMatch && this.roundActive) {
+        this.startTdmHeal('bandage');
+      } else if (e.code === 'KeyM' && this.isTdmMatch && this.roundActive) {
+        this.startTdmHeal('medkit');
+      } else if (e.code === 'KeyF' && this.isTdmMatch && this.nearestLootId) {
+        this.mp.requestLootPickup(this.nearestLootId);
+      } else if (e.code === 'KeyQ') {
+        if (this.activeHeal) this.cancelActiveHeal(false);
         const origin = this.player.getEyePosition();
         const dir = new THREE.Vector3();
         this.camera.getWorldDirection(dir);
-        this.abilities.throwFlash(origin, dir);
+        const thrown = this.abilities.throwFlash(origin, dir, this.mp.localPlayerId);
+        if (thrown && this.isTdmMatch) {
+          if (this.mp.isHost) this.decrementHostUtil(this.mp.localPlayerId, 'flash');
+          this.mp.sendOrdnanceThrow({
+            ownerId: this.mp.localPlayerId,
+            kind: 'flash',
+            origin: { x: origin.x, y: origin.y, z: origin.z },
+            dir: { x: dir.x, y: dir.y, z: dir.z },
+          });
+        }
       } else if (e.code === 'KeyE') {
+        if (this.activeHeal) this.cancelActiveHeal(false);
         const origin = this.player.getEyePosition();
         const dir = new THREE.Vector3();
         this.camera.getWorldDirection(dir);
-        this.abilities.throwSmoke(origin, dir);
+        const thrown = this.abilities.throwSmoke(origin, dir, this.mp.localPlayerId);
+        if (thrown && this.isTdmMatch) {
+          if (this.mp.isHost) this.decrementHostUtil(this.mp.localPlayerId, 'smoke');
+          this.mp.sendOrdnanceThrow({
+            ownerId: this.mp.localPlayerId,
+            kind: 'smoke',
+            origin: { x: origin.x, y: origin.y, z: origin.z },
+            dir: { x: dir.x, y: dir.y, z: dir.z },
+          });
+        }
       } else if (e.code === 'KeyC') {
+        if (this.activeHeal) this.cancelActiveHeal(false);
         const origin = this.player.getEyePosition();
         const dir = new THREE.Vector3();
         this.camera.getWorldDirection(dir);
-        this.abilities.throwFrag(origin, dir);
+        const thrown = this.abilities.throwFrag(origin, dir, this.mp.localPlayerId);
+        if (thrown && this.isTdmMatch) {
+          if (this.mp.isHost) this.decrementHostUtil(this.mp.localPlayerId, 'frag');
+          this.mp.sendOrdnanceThrow({
+            ownerId: this.mp.localPlayerId,
+            kind: 'frag',
+            origin: { x: origin.x, y: origin.y, z: origin.z },
+            dir: { x: dir.x, y: dir.y, z: dir.z },
+          });
+        }
       }
     });
 
@@ -528,12 +667,21 @@ class SunfireGame {
     window.addEventListener('wheel', (e) => {
       if (this.paused || !this.player.alive) return;
       if (Math.abs(e.deltaY) > 2) {
+        if (this.activeHeal) this.cancelActiveHeal(false);
         this.weapons.cycleSlot(e.deltaY);
       }
     });
   }
 
   private startNewMatch(): void {
+    this.isTdmMatch = false;
+    this.activeHeal = null;
+    this.tdmBandages = 0;
+    this.tdmMedkits = 0;
+    this.clearLootDrops();
+    this.hud.setTdmMedSlotsVisible(false);
+    this.hud.updateHealProgress(null, 0, 1);
+
     this.matchStarted = true;
     this.roundNumber = 1;
     this.allyScore = 0;
@@ -639,8 +787,10 @@ class SunfireGame {
   private resumeGame(): void {
     this.paused = false;
     this.menuOverlay.classList.add('hidden');
+    this.tdmOverlay.classList.add('hidden');
     this.hud.setVisible(true);
-    this.btnDeployLabel.textContent = 'RESUME OPERATION';
+    this.btnDeployLabel.textContent = this.isTdmMatch ? 'RESUME TDM MATCH' : 'RESUME OPERATION';
+    this.btnRestart.textContent = this.isTdmMatch ? 'LEAVE TDM MATCH' : 'RESTART MATCH';
     this.btnRestart.classList.remove('hidden');
     Promise.resolve(this.renderer.domElement.requestPointerLock?.()).catch(() => {});
   }
@@ -652,11 +802,1250 @@ class SunfireGame {
     this.player.clearKeys();
     this.menuOverlay.classList.remove('hidden');
     this.hud.setVisible(false);
-    this.btnDeployLabel.textContent = 'RESUME OPERATION';
+    this.btnDeployLabel.textContent = this.isTdmMatch ? 'RESUME TDM MATCH' : 'RESUME OPERATION';
+    this.btnRestart.textContent = this.isTdmMatch ? 'LEAVE TDM MATCH' : 'RESTART MATCH';
     this.btnRestart.classList.remove('hidden');
     if (document.pointerLockElement === this.renderer.domElement) {
       document.exitPointerLock?.();
     }
+  }
+
+  // =========================================================================
+  // TEAM DEATH MATCH — HOSTED LOBBY & ONLINE MULTIPLAYER (1v1 TO 3v3)
+  // =========================================================================
+  private initMultiplayer(): void {
+    this.mp = new MultiplayerManager({
+      onLobbyState: (state) => {
+        this.hideTdmError();
+        this.showTdmLobbyRoom();
+        this.renderTdmLobby(state);
+        if (!this.isTdmMatch && state.map !== this.settings.map) {
+          this.switchMapForTdm(state.map);
+        }
+      },
+      onStatus: (text, ready) => {
+        const dot = document.getElementById('tdm-status-dot');
+        const txt = document.getElementById('tdm-status-text');
+        if (txt) txt.textContent = text;
+        if (dot) dot.classList.toggle('ready', ready);
+      },
+      onError: (msg) => {
+        this.showTdmError(msg);
+      },
+      onMatchStart: (state, round) => {
+        this.startTdmMatchClient(state, round);
+      },
+      onRoundStart: (round) => {
+        this.applyTdmRoundStart(round);
+      },
+      onRoundEnd: (data) => {
+        this.applyTdmRoundEnd(data);
+      },
+      onMatchEnd: (data) => {
+        this.applyTdmMatchEnd(data);
+      },
+      onReturnToLobby: (state) => {
+        this.isTdmMatch = false;
+        this.matchStarted = false;
+        this.roundActive = false;
+        this.paused = true;
+        this.fireHeld = false;
+        this.adsHeld = false;
+        this.activeHeal = null;
+        this.player.clearKeys();
+        this.clearRemotePlayers();
+        this.clearLootDrops();
+        this.hud.setTdmMedSlotsVisible(false);
+        this.hud.setVisible(false);
+        this.matchEndOverlay.classList.add('hidden');
+        this.menuOverlay.classList.add('hidden');
+        if (document.pointerLockElement === this.renderer.domElement) {
+          document.exitPointerLock?.();
+        }
+        this.showTdmLobbyRoom();
+        this.renderTdmLobby(state);
+      },
+      onSnapshot: (snapshot) => {
+        this.applyTdmWorldSnapshot(snapshot);
+      },
+      onClientPose: (playerId, pose) => {
+        this.applyHostClientPose(playerId, pose);
+      },
+      onHostShotReceived: (shot) => {
+        this.handleHostShotReceived(shot);
+      },
+      onShotFx: (shot) => {
+        this.playRemoteShotFx(shot);
+      },
+      onOrdnance: (data) => {
+        if (!this.isTdmMatch) return;
+        if (this.mp.isHost) {
+          this.decrementHostUtil(data.ownerId, data.kind);
+        }
+        if (data.ownerId === this.mp.localPlayerId) return;
+        this.abilities.spawnRemoteThrow(
+          data.kind,
+          new THREE.Vector3(data.origin.x, data.origin.y, data.origin.z),
+          new THREE.Vector3(data.dir.x, data.dir.y, data.dir.z),
+          data.ownerId
+        );
+      },
+      onDamage: (data) => {
+        this.applyTdmDamageEvent(data);
+      },
+      onKill: (data) => {
+        this.applyTdmKillEvent(data);
+      },
+      onHostHealReceived: (data) => {
+        this.handleHostHealReceived(data);
+      },
+      onLootSpawn: (data) => {
+        this.spawnLootDropVisual(data);
+      },
+      onHostLootPickupReq: (dropId, pickerId) => {
+        this.handleHostLootPickupReq(dropId, pickerId);
+      },
+      onLootPicked: (data) => {
+        this.applyLootPickedEvent(data);
+      },
+      onPlayerDisconnected: (playerId, name) => {
+        const rp = this.remotePlayers.get(playerId);
+        if (rp) {
+          rp.dispose(this.scene);
+          this.remotePlayers.delete(playerId);
+        }
+        this.hostLivePlayers.delete(playerId);
+        this.hostPlayerUtils.delete(playerId);
+        if (this.isTdmMatch) {
+          this.hud.showBanner(`${name} DISCONNECTED`, 'PLAYER LEFT', 2.0);
+          if (this.mp.isHost && this.mp.lobbyState) {
+            const blueLeft = this.mp.lobbyState.players.filter((p) => p.team === 'blue').length;
+            const redLeft = this.mp.lobbyState.players.filter((p) => p.team === 'red').length;
+            if (blueLeft === 0 || redLeft === 0) {
+              this.mp.broadcastReturnToLobby();
+              this.showTdmError(`${name} left — match returned to lobby.`);
+            }
+          }
+        }
+      },
+      onHostDisconnected: () => {
+        const wasInMatch = this.isTdmMatch;
+        this.isTdmMatch = false;
+        this.matchStarted = false;
+        this.roundActive = false;
+        this.paused = true;
+        this.fireHeld = false;
+        this.adsHeld = false;
+        this.activeHeal = null;
+        this.player.clearKeys();
+        this.clearRemotePlayers();
+        this.clearLootDrops();
+        this.hud.setTdmMedSlotsVisible(false);
+        this.hud.setVisible(false);
+        this.matchEndOverlay.classList.add('hidden');
+        this.menuOverlay.classList.add('hidden');
+        if (document.pointerLockElement === this.renderer.domElement) {
+          document.exitPointerLock?.();
+        }
+        this.tdmOverlay.classList.remove('hidden');
+        this.tdmEntryView.classList.remove('hidden');
+        this.tdmRoomView.classList.add('hidden');
+        this.showTdmError(wasInMatch ? 'Host disconnected. Match ended.' : 'Host closed the lobby.');
+      },
+    });
+  }
+
+  private bindTdmLobbyUI(): void {
+    const nameInput = document.getElementById('tdm-player-name') as HTMLInputElement;
+    const codeInput = document.getElementById('tdm-join-code') as HTMLInputElement;
+
+    const savedName = localStorage.getItem('sunfire_tdm_name');
+    if (savedName) {
+      nameInput.value = savedName;
+    }
+
+    nameInput.addEventListener('input', () => {
+      this.hideTdmError();
+      const cleaned = sanitizePlayerName(nameInput.value);
+      if (cleaned) localStorage.setItem('sunfire_tdm_name', cleaned);
+    });
+
+    codeInput.addEventListener('input', () => {
+      this.hideTdmError();
+      codeInput.value = codeInput.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+    });
+
+    codeInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        document.getElementById('btn-tdm-join')?.click();
+      }
+    });
+
+    document.querySelectorAll<HTMLButtonElement>('#tdm-host-map-pills .pill').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('#tdm-host-map-pills .pill').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        this.tdmHostSelectedMap = btn.dataset.tdmHostMap as MapId;
+      });
+    });
+
+    document.getElementById('btn-tdm-host')!.addEventListener('click', () => {
+      this.sound.unlock();
+      this.hideTdmError();
+      const clean = sanitizePlayerName(nameInput.value);
+      if (clean) localStorage.setItem('sunfire_tdm_name', clean);
+      this.mp.hostLobby(nameInput.value, this.tdmHostSelectedMap);
+    });
+
+    document.getElementById('btn-tdm-join')!.addEventListener('click', () => {
+      this.sound.unlock();
+      this.hideTdmError();
+      const clean = sanitizePlayerName(nameInput.value);
+      if (clean) localStorage.setItem('sunfire_tdm_name', clean);
+      this.mp.joinLobby(nameInput.value, codeInput.value);
+    });
+
+    document.getElementById('btn-tdm-copy')!.addEventListener('click', () => {
+      const code = this.mp.lobbyState?.code;
+      if (!code) return;
+      navigator.clipboard?.writeText(code).catch(() => {});
+      const copyBtn = document.getElementById('btn-tdm-copy')!;
+      copyBtn.textContent = 'COPIED!';
+      setTimeout(() => {
+        copyBtn.textContent = 'COPY';
+      }, 1500);
+    });
+
+    document.querySelectorAll<HTMLButtonElement>('#tdm-room-map-pills .pill').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!this.mp.isHost) return;
+        const mapId = btn.dataset.tdmRoomMap as MapId;
+        this.mp.setMap(mapId);
+      });
+    });
+
+    document.getElementById('btn-tdm-join-blue')!.addEventListener('click', () => {
+      this.mp.switchTeam('blue');
+    });
+
+    document.getElementById('btn-tdm-join-red')!.addEventListener('click', () => {
+      this.mp.switchTeam('red');
+    });
+
+    document.getElementById('btn-tdm-start')!.addEventListener('click', () => {
+      if (!this.mp.isHost || !this.mp.lobbyState) return;
+      const check = this.mp.canStartMatch();
+      if (!check.ok) {
+        this.showTdmError(check.reason);
+        return;
+      }
+      this.sound.unlock();
+      this.sound.setVolume(this.settings.volume);
+      this.switchMapForTdm(this.mp.lobbyState.map);
+      this.allyScore = 0;
+      this.enemyScore = 0;
+      this.roundNumber = 1;
+      const roundPayload = this.buildTdmRoundStartPayload(1, 0, 0);
+      this.mp.broadcastMatchStart(roundPayload);
+    });
+
+    const closeLobby = () => {
+      this.mp.leaveLobby(true);
+      this.isTdmMatch = false;
+      this.clearRemotePlayers();
+      this.tdmOverlay.classList.add('hidden');
+      this.menuOverlay.classList.remove('hidden');
+      this.hideTdmError();
+      this.setupShowcaseFrame();
+    };
+
+    document.getElementById('btn-tdm-leave')!.addEventListener('click', closeLobby);
+    document.getElementById('btn-tdm-close')!.addEventListener('click', closeLobby);
+  }
+
+  private openTdmLobbyOverlay(): void {
+    this.hideTdmError();
+    this.menuOverlay.classList.add('hidden');
+    this.matchEndOverlay.classList.add('hidden');
+    this.tdmOverlay.classList.remove('hidden');
+
+    if (this.mp.connected && this.mp.lobbyState) {
+      this.tdmEntryView.classList.add('hidden');
+      this.tdmRoomView.classList.remove('hidden');
+      this.renderTdmLobby(this.mp.lobbyState);
+    } else {
+      this.tdmEntryView.classList.remove('hidden');
+      this.tdmRoomView.classList.add('hidden');
+      this.tdmHostSelectedMap = this.settings.map;
+      document.querySelectorAll<HTMLButtonElement>('#tdm-host-map-pills .pill').forEach((b) => {
+        b.classList.toggle('active', b.dataset.tdmHostMap === this.tdmHostSelectedMap);
+      });
+      const nameInput = document.getElementById('tdm-player-name') as HTMLInputElement | null;
+      if (nameInput && !nameInput.value.trim()) {
+        nameInput.focus();
+      }
+    }
+  }
+
+  private showTdmLobbyRoom(): void {
+    this.tdmOverlay.classList.remove('hidden');
+    this.tdmEntryView.classList.add('hidden');
+    this.tdmRoomView.classList.remove('hidden');
+  }
+
+  private showTdmError(msg: string): void {
+    this.tdmErrorEl.textContent = msg;
+    this.tdmErrorEl.classList.remove('hidden');
+  }
+
+  private hideTdmError(): void {
+    this.tdmErrorEl.textContent = '';
+    this.tdmErrorEl.classList.add('hidden');
+  }
+
+  private renderTdmLobby(state: LobbyState): void {
+    const codeEl = document.getElementById('tdm-room-code');
+    if (codeEl) codeEl.textContent = state.code;
+
+    document.querySelectorAll<HTMLButtonElement>('#tdm-room-map-pills .pill').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.tdmRoomMap === state.map);
+      btn.disabled = !this.mp.isHost;
+    });
+
+    const bluePlayers = state.players.filter((p) => p.team === 'blue');
+    const redPlayers = state.players.filter((p) => p.team === 'red');
+
+    const blueCountEl = document.getElementById('tdm-blue-count');
+    const redCountEl = document.getElementById('tdm-red-count');
+    if (blueCountEl) blueCountEl.textContent = `${bluePlayers.length} / ${MAX_PLAYERS_PER_TEAM}`;
+    if (redCountEl) redCountEl.textContent = `${redPlayers.length} / ${MAX_PLAYERS_PER_TEAM}`;
+
+    const renderTeamList = (containerId: string, list: LobbyState['players']) => {
+      const wrap = document.getElementById(containerId);
+      if (!wrap) return;
+      wrap.innerHTML = '';
+      for (let i = 0; i < MAX_PLAYERS_PER_TEAM; i++) {
+        const p = list[i];
+        const row = document.createElement('div');
+        if (p) {
+          const isMe = p.id === this.mp.localPlayerId;
+          row.className = `tdm-slot filled${isMe ? ' is-you' : ''}`;
+          const nameSpan = document.createElement('span');
+          nameSpan.className = 'tdm-slot-name';
+          nameSpan.textContent = p.name;
+          const badgeWrap = document.createElement('span');
+          badgeWrap.className = 'tdm-slot-badges';
+          if (p.isHost) {
+            const h = document.createElement('span');
+            h.className = 'tdm-badge host';
+            h.textContent = 'HOST';
+            badgeWrap.appendChild(h);
+          }
+          if (isMe) {
+            const m = document.createElement('span');
+            m.className = 'tdm-badge you';
+            m.textContent = 'YOU';
+            badgeWrap.appendChild(m);
+          }
+          row.appendChild(nameSpan);
+          row.appendChild(badgeWrap);
+        } else {
+          row.className = 'tdm-slot empty';
+          row.textContent = `OPEN SLOT ${i + 1}`;
+        }
+        wrap.appendChild(row);
+      }
+    };
+
+    renderTeamList('tdm-blue-slots', bluePlayers);
+    renderTeamList('tdm-red-slots', redPlayers);
+
+    const localP = this.mp.getLocalPlayer();
+    const joinBlueBtn = document.getElementById('btn-tdm-join-blue') as HTMLButtonElement | null;
+    const joinRedBtn = document.getElementById('btn-tdm-join-red') as HTMLButtonElement | null;
+    if (joinBlueBtn) {
+      joinBlueBtn.disabled = localP?.team === 'blue' || bluePlayers.length >= MAX_PLAYERS_PER_TEAM;
+      joinBlueBtn.textContent = localP?.team === 'blue' ? 'ON BLUE TEAM' : 'JOIN BLUE TEAM';
+    }
+    if (joinRedBtn) {
+      joinRedBtn.disabled = localP?.team === 'red' || redPlayers.length >= MAX_PLAYERS_PER_TEAM;
+      joinRedBtn.textContent = localP?.team === 'red' ? 'ON RED TEAM' : 'JOIN RED TEAM';
+    }
+
+    const startBtn = document.getElementById('btn-tdm-start') as HTMLButtonElement | null;
+    const hintEl = document.getElementById('tdm-ready-hint');
+    const check = this.mp.canStartMatch();
+    if (hintEl) {
+      hintEl.textContent = check.ok
+        ? this.mp.isHost
+          ? `${check.reason} — PRESS START MATCH`
+          : `${check.reason} — WAITING FOR HOST TO START`
+        : check.reason;
+      hintEl.classList.toggle('ready', check.ok);
+    }
+    if (startBtn) {
+      startBtn.disabled = !this.mp.isHost || !check.ok;
+      startBtn.textContent = this.mp.isHost ? 'START MATCH' : 'WAITING FOR HOST';
+    }
+  }
+
+  private switchMapForTdm(mapId: MapId): void {
+    if (this.settings.map === mapId) return;
+    this.settings.map = mapId;
+    this.scene.remove(this.level.group);
+    this.weapons.clearRoundFx();
+    this.abilities.resetCharges();
+
+    this.applyMapAtmosphereConfig(mapId);
+    const builder = new LevelBuilder(this.textures);
+    this.level = builder.build(this.scene, mapId);
+
+    const mmCanvas = document.getElementById('minimap-canvas') as HTMLCanvasElement;
+    this.minimap = new Minimap(mmCanvas, this.level.minimapRects, this.level.mapBounds);
+
+    document.querySelectorAll<HTMLButtonElement>('#map-pills .pill[data-map]').forEach((b) => {
+      b.classList.toggle('active', b.dataset.map === mapId);
+    });
+  }
+
+  private getTeamSpawn(team: LobbyTeam, slotIndex: number): { pos: THREE.Vector3; yaw: number } {
+    if (team === 'blue') {
+      const slots = [
+        this.level.playerSpawn.pos,
+        this.level.allySpawns[0]?.pos ?? new THREE.Vector3(-2.6, 0, 7.6),
+        this.level.allySpawns[1]?.pos ?? new THREE.Vector3(2.8, 0, 7.4),
+      ];
+      return {
+        pos: slots[slotIndex % slots.length].clone(),
+        yaw: 0.0, // Camera looks -Z (North, straight into the arena)
+      };
+    }
+    const redSlots = [
+      this.level.enemySpawns[0]?.pos ?? new THREE.Vector3(0.35, 0, -9.2),
+      this.level.enemySpawns[1]?.pos ?? new THREE.Vector3(-5.4, 0, -9.8),
+      this.level.enemySpawns[2]?.pos ?? new THREE.Vector3(5.6, 0, -10.2),
+    ];
+    return {
+      pos: redSlots[slotIndex % redSlots.length].clone(),
+      yaw: Math.PI, // Camera looks +Z (South, straight toward Blue Team)
+    };
+  }
+
+  private buildTdmRoundStartPayload(
+    roundNumber: number,
+    blueScore: number,
+    redScore: number
+  ): RoundStartPayload {
+    const spawns: RoundSpawnAssignment[] = [];
+    const players = this.mp.lobbyState?.players ?? [];
+    for (const p of players) {
+      const sp = this.getTeamSpawn(p.team, p.slotIndex);
+      spawns.push({
+        id: p.id,
+        pos: { x: sp.pos.x, y: sp.pos.y, z: sp.pos.z },
+        yaw: sp.yaw,
+      });
+    }
+    return {
+      roundNumber,
+      roundTimer: ROUND_DURATION,
+      blueScore,
+      redScore,
+      spawns,
+    };
+  }
+
+  private clearRemotePlayers(): void {
+    for (const rp of this.remotePlayers.values()) {
+      rp.dispose(this.scene);
+    }
+    this.remotePlayers.clear();
+    this.hostLivePlayers.clear();
+  }
+
+  private startTdmMatchClient(state: LobbyState, round: RoundStartPayload): void {
+    this.switchMapForTdm(state.map);
+
+    // Clear all solo AI agents so TDM is pure human-vs-human PvP!
+    for (const a of this.agents) {
+      a.dispose(this.scene);
+    }
+    this.agents = [];
+    this.clearRemotePlayers();
+
+    this.isTdmMatch = true;
+    this.matchStarted = true;
+    this.playerKills = 0;
+    this.playerHeadshots = 0;
+    this.playerDeaths = 0;
+    this.playerScore = 0;
+    this.hud.clearKillfeed();
+
+    const localP = state.players.find((p) => p.id === this.mp.localPlayerId);
+    this.tdmLocalTeam = localP?.team ?? 'blue';
+
+    // Spawn 3rd-person rigged soldier avatars for EVERY other player (teammates + enemies!)
+    for (const p of state.players) {
+      if (p.id === this.mp.localPlayerId) continue;
+      const spData = round.spawns.find((s) => s.id === p.id);
+      const spPos = spData
+        ? new THREE.Vector3(spData.pos.x, spData.pos.y, spData.pos.z)
+        : this.getTeamSpawn(p.team, p.slotIndex).pos;
+      const spYaw = spData ? spData.yaw : this.getTeamSpawn(p.team, p.slotIndex).yaw;
+      const rp = new RemotePlayer(p.id, p.name, p.team, spPos, spYaw, this.scene, this.textures);
+      this.remotePlayers.set(p.id, rp);
+    }
+
+    this.applyTdmRoundStart(round);
+    this.tdmOverlay.classList.add('hidden');
+    this.matchEndOverlay.classList.add('hidden');
+    this.menuOverlay.classList.add('hidden');
+    this.resumeGame();
+  }
+
+  private applyTdmRoundStart(round: RoundStartPayload): void {
+    this.roundNumber = round.roundNumber;
+    this.roundTimer = round.roundTimer;
+    this.allyScore = round.blueScore;
+    this.enemyScore = round.redScore;
+    this.roundActive = true;
+    this.roundEndDelay = 0;
+    this.roundKillStreak = 0;
+    this.roundDamageHistory.clear();
+    this.hud.hideDamageHistory();
+
+    // Exact equal loadout for EVERY player: 1 AKM, 1 SCAR-L, 2 Frags, 2 Smokes, 2 Flashes, 100 HP + 50 Shield!
+    const mySpawn = round.spawns.find((s) => s.id === this.mp.localPlayerId);
+    const fallback = this.getTeamSpawn(this.tdmLocalTeam, 0);
+    const spawnPos = mySpawn
+      ? new THREE.Vector3(mySpawn.pos.x, mySpawn.pos.y, mySpawn.pos.z)
+      : fallback.pos;
+    const spawnYaw = mySpawn ? mySpawn.yaw : fallback.yaw;
+
+    this.player.reset(spawnPos, spawnYaw);
+    this.weapons.resetAll();
+    this.weapons.clearRoundFx();
+    this.abilities.resetCharges();
+
+    // TDM-only medical loadout: 4 Bandages (B, 5s, +25 HP) & 1 Medkit (M, 10s, +75 HP)
+    this.clearLootDrops();
+    this.activeHeal = null;
+    this.localHealGraceTimer = 0;
+    this.tdmBandages = TDM_BANDAGE_START;
+    this.tdmMedkits = TDM_MEDKIT_START;
+    this.hud.setTdmMedSlotsVisible(true);
+    this.hud.updateHealProgress(null, 0, 1);
+    this.hud.updateMedkits(this.tdmBandages, this.tdmMedkits, null);
+
+    for (const [id, rp] of this.remotePlayers) {
+      const sp = round.spawns.find((s) => s.id === id);
+      if (sp) {
+        rp.respawn(new THREE.Vector3(sp.pos.x, sp.pos.y, sp.pos.z), sp.yaw);
+      }
+    }
+
+    if (this.mp.isHost) {
+      this.hostLivePlayers.clear();
+      this.hostPlayerUtils.clear();
+      for (const sp of round.spawns) {
+        this.hostLivePlayers.set(sp.id, {
+          id: sp.id,
+          x: sp.pos.x,
+          y: sp.pos.y,
+          z: sp.pos.z,
+          yaw: sp.yaw,
+          pitch: 0,
+          crouching: false,
+          weaponSlot: 0,
+          hp: 100,
+          shield: 50,
+          alive: true,
+        });
+        this.hostPlayerUtils.set(sp.id, {
+          frag: 2,
+          flash: 2,
+          smoke: 2,
+          bandage: TDM_BANDAGE_START,
+          medkit: TDM_MEDKIT_START,
+        });
+      }
+    }
+
+    const mapTitle = this.settings.map === 'factory' ? 'VIKENDI' : 'WAREHOUSE';
+    const teamTag = this.tdmLocalTeam === 'blue' ? 'BLUE TEAM' : 'RED TEAM';
+    this.hud.showBanner(`${mapTitle} // ${teamTag}`, `ROUND ${this.roundNumber}`, 2.2);
+  }
+
+  private applyHostClientPose(playerId: string, pose: PlayerPoseInput): void {
+    if (!this.mp.isHost || !this.isTdmMatch) return;
+    const st = this.hostLivePlayers.get(playerId);
+    if (!st || !st.alive) return;
+    st.x = pose.x;
+    st.y = pose.y;
+    st.z = pose.z;
+    st.yaw = pose.yaw;
+    st.pitch = pose.pitch;
+    st.crouching = pose.crouching;
+    st.weaponSlot = pose.weaponSlot;
+
+    const rp = this.remotePlayers.get(playerId);
+    if (rp) {
+      rp.applyNetworkState(st.x, st.y, st.z, st.yaw, st.pitch, st.crouching, st.weaponSlot, st.hp, st.shield, st.alive);
+    }
+  }
+
+  private applyTdmWorldSnapshot(snapshot: WorldSnapshot): void {
+    if (!this.isTdmMatch || this.mp.isHost) return;
+    this.roundNumber = snapshot.roundNumber;
+    this.roundTimer = snapshot.roundTimer;
+    this.roundActive = snapshot.roundActive;
+    this.allyScore = snapshot.blueScore;
+    this.enemyScore = snapshot.redScore;
+
+    for (const ps of snapshot.players) {
+      if (ps.id === this.mp.localPlayerId) {
+        // Respect brief grace window right after completing a local Bandage/Medkit so stale snapshots don't flicker HP
+        if (this.localHealGraceTimer <= 0 || ps.hp >= this.player.hp || !ps.alive) {
+          this.player.hp = ps.hp;
+        }
+        this.player.shield = ps.shield;
+        if (this.player.alive && !ps.alive) {
+          this.player.alive = false;
+          if (this.activeHeal) this.cancelActiveHeal(false);
+        }
+        continue;
+      }
+      const rp = this.remotePlayers.get(ps.id);
+      if (rp) {
+        rp.applyNetworkState(ps.x, ps.y, ps.z, ps.yaw, ps.pitch, ps.crouching, ps.weaponSlot, ps.hp, ps.shield, ps.alive);
+      }
+    }
+  }
+
+  private handleHostShotReceived(shot: NetShotPayload): void {
+    if (!this.mp.isHost || !this.isTdmMatch || !this.mp.lobbyState) return;
+    const shooterState = this.hostLivePlayers.get(shot.shooterId);
+    if (!shooterState || !shooterState.alive) return;
+
+    // Broadcast visual/audio shot FX to every other player
+    this.mp.broadcastShotFx(shot, shot.shooterId);
+    if (shot.shooterId !== this.mp.localPlayerId) {
+      this.playRemoteShotFx(shot);
+    }
+
+    if (!this.roundActive || !shot.hitTargetId || !shot.damage) return;
+    const shooterLobby = this.mp.lobbyState.players.find((p) => p.id === shot.shooterId);
+    const victimLobby = this.mp.lobbyState.players.find((p) => p.id === shot.hitTargetId);
+    if (!shooterLobby || !victimLobby || shooterLobby.team === victimLobby.team) return;
+
+    // Authoritative damage clamp (matches AKM/SCAR-L max headshot damage)
+    const clampedDmg = Math.max(1, Math.min(165, Math.round(shot.damage)));
+    const impulse = new THREE.Vector3(shot.shotDir.x, shot.shotDir.y, shot.shotDir.z);
+    if (impulse.lengthSq() < 1e-4) impulse.set(0, 0, 1);
+    else impulse.normalize();
+
+    this.applyHostAuthoritativeDamage(
+      shot.hitTargetId,
+      shot.shooterId,
+      clampedDmg,
+      shot.weaponName,
+      shot.hitZone === 'head',
+      impulse,
+      shot.hitPoint
+        ? new THREE.Vector3(shot.hitPoint.x, shot.hitPoint.y, shot.hitPoint.z)
+        : undefined
+    );
+  }
+
+  private applyHostAuthoritativeDamage(
+    victimId: string,
+    attackerId: string,
+    amount: number,
+    weaponName: string,
+    headshot: boolean,
+    impulseDir: THREE.Vector3,
+    hitPoint?: THREE.Vector3
+  ): void {
+    if (!this.mp.isHost || !this.mp.lobbyState || !this.roundActive) return;
+    const victimState = this.hostLivePlayers.get(victimId);
+    if (!victimState || !victimState.alive) return;
+
+    const attackerLobby = this.mp.lobbyState.players.find((p) => p.id === attackerId);
+    const victimLobby = this.mp.lobbyState.players.find((p) => p.id === victimId);
+    if (!victimLobby) return;
+
+    // Exact same armor absorption math as PlayerController (66% to shield until depleted)
+    let remaining = amount;
+    if (victimState.shield > 0) {
+      const absorbed = Math.min(victimState.shield, Math.round(amount * 0.66));
+      victimState.shield -= absorbed;
+      remaining -= absorbed;
+    }
+    victimState.hp = Math.max(0, victimState.hp - remaining);
+    const died = victimState.hp <= 0;
+    if (died) {
+      victimState.alive = false;
+    }
+
+    const attackerState = this.hostLivePlayers.get(attackerId);
+    const attackerPos = attackerState
+      ? { x: attackerState.x, y: attackerState.y, z: attackerState.z }
+      : { x: victimState.x, y: victimState.y, z: victimState.z };
+
+    this.mp.broadcastDamage({
+      victimId,
+      attackerId,
+      attackerName: attackerLobby?.name ?? 'UNKNOWN',
+      attackerPos,
+      weaponName,
+      damage: amount,
+      hpAfter: victimState.hp,
+      shieldAfter: victimState.shield,
+      headshot,
+    });
+
+    if (hitPoint && victimId !== this.mp.localPlayerId) {
+      const rp = this.remotePlayers.get(victimId);
+      rp?.triggerHitFlash();
+    }
+
+    if (died) {
+      this.mp.broadcastKill({
+        victimId,
+        victimName: victimLobby.name,
+        victimTeam: victimLobby.team,
+        attackerId,
+        attackerName: attackerLobby?.name ?? victimLobby.name,
+        attackerTeam: attackerLobby?.team ?? victimLobby.team,
+        weaponName,
+        headshot,
+        impulseDir: { x: impulseDir.x, y: impulseDir.y, z: impulseDir.z },
+        victimPos: { x: victimState.x, y: victimState.y, z: victimState.z },
+      });
+
+      // Drop ALL remaining utilities (Frags, Smokes, Flashes, Bandages, Medkits) for ANY player to pick up (F)!
+      const deadUtils = this.hostPlayerUtils.get(victimId);
+      if (deadUtils) {
+        const totalItems =
+          deadUtils.frag + deadUtils.flash + deadUtils.smoke + deadUtils.bandage + deadUtils.medkit;
+        if (totalItems > 0) {
+          const drop: NetLootSpawnPayload = {
+            dropId: `loot_${++this.lootDropSeq}`,
+            victimName: victimLobby.name,
+            pos: { x: victimState.x, y: 0, z: victimState.z },
+            contents: { ...deadUtils },
+          };
+          deadUtils.frag = 0;
+          deadUtils.flash = 0;
+          deadUtils.smoke = 0;
+          deadUtils.bandage = 0;
+          deadUtils.medkit = 0;
+          this.hostLootDrops.set(drop.dropId, drop);
+          this.mp.broadcastLootSpawn(drop);
+        }
+      }
+    }
+  }
+
+  private decrementHostUtil(playerId: string, kind: keyof UtilityBundle): void {
+    const u = this.hostPlayerUtils.get(playerId);
+    if (!u) return;
+    u[kind] = Math.max(0, u[kind] - 1);
+  }
+
+  private startTdmHeal(kind: 'bandage' | 'medkit'): void {
+    if (!this.isTdmMatch || !this.roundActive || !this.player.alive) return;
+    if (this.activeHeal && this.activeHeal.kind === kind) return;
+    if (this.player.hp >= this.player.maxHp) {
+      this.hud.showToast('ALREADY AT FULL HP', 'warn', 1.4);
+      return;
+    }
+    const available = kind === 'medkit' ? this.tdmMedkits : this.tdmBandages;
+    if (available <= 0) {
+      this.hud.showToast(kind === 'medkit' ? 'NO MEDKITS LEFT' : 'NO BANDAGES LEFT', 'warn', 1.4);
+      return;
+    }
+    this.fireHeld = false;
+    this.adsHeld = false;
+    const duration = kind === 'medkit' ? TDM_MEDKIT_TIME : TDM_BANDAGE_TIME;
+    this.activeHeal = { kind, elapsed: 0, duration };
+    this.sound.playHealStart(kind === 'medkit');
+    this.hud.updateHealProgress(kind, 0, duration);
+  }
+
+  private cancelActiveHeal(byFire: boolean): void {
+    if (!this.activeHeal) return;
+    const wasMed = this.activeHeal.kind === 'medkit';
+    this.activeHeal = null;
+    this.hud.updateHealProgress(null, 0, 1);
+    if (byFire) {
+      this.hud.showToast(
+        wasMed ? 'MEDKIT STOPPED — PRESS M TO RESTART' : 'BANDAGE STOPPED — PRESS B TO RESTART',
+        'warn',
+        1.5
+      );
+    }
+  }
+
+  private updateTdmHealing(dt: number): void {
+    if (this.localHealGraceTimer > 0) {
+      this.localHealGraceTimer = Math.max(0, this.localHealGraceTimer - dt);
+    }
+    if (!this.activeHeal) {
+      this.hud.updateHealProgress(null, 0, 1);
+      return;
+    }
+    if (!this.player.alive || !this.roundActive) {
+      this.cancelActiveHeal(false);
+      return;
+    }
+
+    this.activeHeal.elapsed += dt;
+    this.hud.updateHealProgress(this.activeHeal.kind, this.activeHeal.elapsed, this.activeHeal.duration);
+
+    if (this.activeHeal.elapsed >= this.activeHeal.duration) {
+      const kind = this.activeHeal.kind;
+      this.activeHeal = null;
+      this.hud.updateHealProgress(null, 0, 1);
+
+      if (kind === 'medkit') {
+        if (this.tdmMedkits <= 0) return;
+        this.tdmMedkits -= 1;
+        this.player.heal(TDM_MEDKIT_HEAL);
+        this.sound.playHealComplete(true);
+        this.hud.showToast('+75 HP // MEDKIT APPLIED', 'heal', 2.0);
+      } else {
+        if (this.tdmBandages <= 0) return;
+        this.tdmBandages -= 1;
+        this.player.heal(TDM_BANDAGE_HEAL);
+        this.sound.playHealComplete(false);
+        this.hud.showToast('+25 HP // BANDAGE APPLIED', 'heal', 1.8);
+      }
+      this.localHealGraceTimer = 0.4;
+      this.mp.sendHealComplete(kind);
+    }
+  }
+
+  private handleHostHealReceived(data: NetHealPayload): void {
+    if (!this.mp.isHost || !this.isTdmMatch || !this.roundActive) return;
+    const st = this.hostLivePlayers.get(data.playerId);
+    const utils = this.hostPlayerUtils.get(data.playerId);
+    if (!st || !st.alive || !utils) return;
+
+    if (data.kind === 'medkit' && utils.medkit > 0) {
+      utils.medkit -= 1;
+      st.hp = Math.min(100, st.hp + TDM_MEDKIT_HEAL);
+    } else if (data.kind === 'bandage' && utils.bandage > 0) {
+      utils.bandage -= 1;
+      st.hp = Math.min(100, st.hp + TDM_BANDAGE_HEAL);
+    } else {
+      return;
+    }
+
+    if (data.playerId === this.mp.localPlayerId) {
+      this.player.hp = st.hp;
+    } else {
+      const rp = this.remotePlayers.get(data.playerId);
+      if (rp) rp.hp = st.hp;
+    }
+  }
+
+  private spawnLootDropVisual(data: NetLootSpawnPayload): void {
+    if (!this.isTdmMatch) return;
+    const prev = this.lootDrops.get(data.dropId);
+    if (prev) prev.dispose(this.scene);
+    const drop = new LootDrop(
+      data.dropId,
+      data.victimName,
+      new THREE.Vector3(data.pos.x, 0, data.pos.z),
+      data.contents,
+      this.scene
+    );
+    this.lootDrops.set(data.dropId, drop);
+  }
+
+  private handleHostLootPickupReq(dropId: string, pickerId: string): void {
+    if (!this.mp.isHost || !this.isTdmMatch || !this.mp.lobbyState) return;
+    const drop = this.hostLootDrops.get(dropId);
+    if (!drop) return;
+    const pickerState = this.hostLivePlayers.get(pickerId);
+    if (!pickerState || !pickerState.alive) return;
+
+    const dx = pickerState.x - drop.pos.x;
+    const dz = pickerState.z - drop.pos.z;
+    if (dx * dx + dz * dz > 4.4 * 4.4) return;
+
+    this.hostLootDrops.delete(dropId);
+    const pickerUtils = this.hostPlayerUtils.get(pickerId);
+    if (pickerUtils) {
+      pickerUtils.frag += drop.contents.frag;
+      pickerUtils.flash += drop.contents.flash;
+      pickerUtils.smoke += drop.contents.smoke;
+      pickerUtils.bandage += drop.contents.bandage;
+      pickerUtils.medkit += drop.contents.medkit;
+    }
+    const pickerLobby = this.mp.lobbyState.players.find((p) => p.id === pickerId);
+    this.mp.broadcastLootPicked({
+      dropId,
+      pickerId,
+      pickerName: pickerLobby?.name ?? 'PLAYER',
+      contents: { ...drop.contents },
+    });
+  }
+
+  private applyLootPickedEvent(data: NetLootPickupPayload): void {
+    const drop = this.lootDrops.get(data.dropId);
+    if (drop) {
+      drop.dispose(this.scene);
+      this.lootDrops.delete(data.dropId);
+    }
+    if (this.nearestLootId === data.dropId) {
+      this.nearestLootId = null;
+      this.hud.updateLootPrompt(null, []);
+    }
+
+    if (data.pickerId === this.mp.localPlayerId) {
+      this.abilities.charges.frag += data.contents.frag;
+      this.abilities.charges.flash += data.contents.flash;
+      this.abilities.charges.smoke += data.contents.smoke;
+      this.tdmBandages += data.contents.bandage;
+      this.tdmMedkits += data.contents.medkit;
+      this.sound.playPickup();
+      const summary = this.formatUtilitySummary(data.contents);
+      if (summary.length > 0) {
+        this.hud.showToast(`LOOTED ${summary.join(' • ')}`, 'loot', 2.4);
+      }
+    }
+  }
+
+  private clearLootDrops(): void {
+    for (const drop of this.lootDrops.values()) {
+      drop.dispose(this.scene);
+    }
+    this.lootDrops.clear();
+    this.hostLootDrops.clear();
+    this.nearestLootId = null;
+    this.hud.updateLootPrompt(null, []);
+  }
+
+  private formatUtilitySummary(c: UtilityBundle): string[] {
+    const items: string[] = [];
+    if (c.frag > 0) items.push(`${c.frag} FRAG`);
+    if (c.smoke > 0) items.push(`${c.smoke} SMOKE`);
+    if (c.flash > 0) items.push(`${c.flash} FLASH`);
+    if (c.bandage > 0) items.push(`${c.bandage} BANDAGE`);
+    if (c.medkit > 0) items.push(`${c.medkit} MEDKIT`);
+    return items;
+  }
+
+  private playRemoteShotFx(shot: NetShotPayload): void {
+    const shooter = this.remotePlayers.get(shot.shooterId);
+    const muzzle = new THREE.Vector3(shot.muzzle.x, shot.muzzle.y, shot.muzzle.z);
+    const endPoint = new THREE.Vector3(shot.endPoint.x, shot.endPoint.y, shot.endPoint.z);
+
+    if (shooter) {
+      shooter.triggerMuzzleFlash();
+      shooter.spottedTimer = 3.2;
+    }
+
+    const dist = muzzle.distanceTo(this.player.pos);
+    const atten = Math.max(0.12, 1 - dist / 42);
+    if (shot.weaponId === 'scarl') {
+      this.sound.playScarShot(atten * 0.78);
+    } else {
+      this.sound.playVandalShot(atten * 0.78);
+    }
+
+    const isEnemyShot = shooter ? shooter.team !== this.tdmLocalTeam : true;
+    this.weapons.spawnPulseLight(muzzle, isEnemyShot ? 0xff5a22 : 0x38d8ff, 9, 0.05, 11);
+    this.weapons.spawnTracer(muzzle, endPoint, isEnemyShot ? 0xff5222 : 0xffaa38, 0.024);
+
+    if (shot.hitTargetId && shot.hitPoint) {
+      const hp = new THREE.Vector3(shot.hitPoint.x, shot.hitPoint.y, shot.hitPoint.z);
+      const dir = new THREE.Vector3(shot.shotDir.x, shot.shotDir.y, shot.shotDir.z).normalize();
+      if (shot.hitTargetId !== this.mp.localPlayerId) {
+        this.weapons.spawnImpact(hp, dir.clone().negate(), true, shot.hitZone === 'head', false);
+        this.projectWallBloodSplatter(hp, dir, shot.hitZone === 'head' ? 0.92 : 0.65);
+      }
+    } else if (shot.hitWall && shot.wallNormal) {
+      const wn = new THREE.Vector3(shot.wallNormal.x, shot.wallNormal.y, shot.wallNormal.z);
+      this.weapons.spawnImpact(endPoint, wn, false, false);
+    }
+  }
+
+  private applyTdmDamageEvent(data: NetDamagePayload): void {
+    if (!this.isTdmMatch) return;
+    if (data.victimId === this.mp.localPlayerId) {
+      this.player.hp = data.hpAfter;
+      this.player.shield = data.shieldAfter;
+      const died = data.hpAfter <= 0;
+      if (died) this.player.alive = false;
+      this.player.addShake(0.065);
+      this.sound.playDamageTaken();
+
+      const toAttacker = new THREE.Vector3(
+        data.attackerPos.x - this.player.pos.x,
+        0,
+        data.attackerPos.z - this.player.pos.z
+      );
+      if (toAttacker.lengthSq() > 0.01) {
+        const relAngle = Math.atan2(toAttacker.x, -toAttacker.z) + this.player.yaw;
+        this.hud.triggerDamage(relAngle);
+      } else {
+        this.hud.triggerDamage(0);
+      }
+      this.recordPlayerDamage(data.attackerName, data.damage, data.weaponName, died);
+    } else {
+      const rp = this.remotePlayers.get(data.victimId);
+      if (rp) {
+        rp.hp = data.hpAfter;
+        rp.shield = data.shieldAfter;
+        rp.triggerHitFlash();
+      }
+      if (data.attackerId === this.mp.localPlayerId && data.weaponName === 'FRAG GRENADE') {
+        this.sound.playHit(data.hpAfter <= 0);
+        this.hud.showHitmarker(data.hpAfter <= 0);
+      }
+    }
+  }
+
+  private applyTdmKillEvent(data: NetKillPayload): void {
+    if (!this.isTdmMatch) return;
+    const impulse = new THREE.Vector3(data.impulseDir.x, data.impulseDir.y, data.impulseDir.z);
+    const vPos = new THREE.Vector3(data.victimPos.x, data.victimPos.y, data.victimPos.z);
+
+    if (data.victimId === this.mp.localPlayerId) {
+      this.player.hp = 0;
+      this.player.alive = false;
+      this.playerDeaths += 1;
+      if (this.activeHeal) this.cancelActiveHeal(false);
+    } else {
+      const rp = this.remotePlayers.get(data.victimId);
+      if (rp) {
+        rp.triggerDeath(impulse, data.headshot);
+        this.weapons.spawnBloodPool(rp.pos, data.headshot, impulse);
+        this.weapons.spawnDroppedWeapon(rp.pos, rp.yaw, impulse);
+      } else {
+        this.weapons.spawnBloodPool(vPos, data.headshot, impulse);
+      }
+    }
+
+    if (data.attackerId === this.mp.localPlayerId && data.victimId !== this.mp.localPlayerId) {
+      this.playerKills += 1;
+      if (data.headshot) this.playerHeadshots += 1;
+      this.roundKillStreak += 1;
+      this.playerScore += data.headshot ? 250 : 150;
+      this.sound.playKillChime(this.roundKillStreak);
+      this.hud.showKillEmblem(this.roundKillStreak, data.headshot);
+    }
+
+    this.hud.pushKillfeed(
+      data.attackerName,
+      data.attackerTeam === 'blue' ? 'ally' : 'enemy',
+      data.victimName,
+      data.victimTeam === 'blue' ? 'ally' : 'enemy',
+      data.weaponName,
+      data.headshot
+    );
+  }
+
+  private handleHostTdmFragDetonation(blastPos: THREE.Vector3, ownerId: string): void {
+    if (!this.mp.isHost || !this.mp.lobbyState || !this.roundActive) return;
+    const ownerLobby = this.mp.lobbyState.players.find((p) => p.id === ownerId);
+    const blastRadius = 6.2;
+
+    for (const p of this.mp.lobbyState.players) {
+      const st = this.hostLivePlayers.get(p.id);
+      if (!st || !st.alive) continue;
+      // No friendly fire on teammates (owner can still take reduced self-blast damage if too close)
+      if (ownerLobby && p.team === ownerLobby.team && p.id !== ownerId) continue;
+
+      const targetCenter = new THREE.Vector3(st.x, st.y + (st.crouching ? 0.65 : 1.0), st.z);
+      const toTarget = new THREE.Vector3().subVectors(targetCenter, blastPos);
+      const dist = toTarget.length();
+      if (dist > blastRadius) continue;
+
+      const dir = dist > 0.01 ? toTarget.clone().divideScalar(dist) : new THREE.Vector3(0, 1, 0);
+      const wallBlock = this.raycastSolidColliders(blastPos, dir, Math.max(0.05, dist - 0.15));
+      if (wallBlock) continue;
+
+      const falloff = 1 - dist / blastRadius;
+      const baseDmg = p.id === ownerId ? 76 : 138;
+      const dmg = Math.round(baseDmg * (0.28 + 0.72 * falloff * falloff));
+      if (dmg <= 0) continue;
+
+      this.applyHostAuthoritativeDamage(p.id, ownerId, dmg, 'FRAG GRENADE', false, dir);
+    }
+  }
+
+  private updateTdmHostRoundRules(dt: number): void {
+    if (!this.mp.isHost || !this.mp.lobbyState) return;
+
+    if (!this.roundActive) {
+      this.roundEndDelay -= dt;
+      if (this.roundEndDelay <= 0) {
+        if (this.allyScore >= ROUNDS_TO_WIN || this.enemyScore >= ROUNDS_TO_WIN) {
+          const winner: LobbyTeam = this.allyScore >= this.enemyScore ? 'blue' : 'red';
+          this.mp.broadcastMatchEnd({
+            winner,
+            blueScore: this.allyScore,
+            redScore: this.enemyScore,
+            players: this.mp.lobbyState.players.map((p) => ({ ...p })),
+          });
+        } else {
+          this.roundNumber += 1;
+          const nextRound = this.buildTdmRoundStartPayload(this.roundNumber, this.allyScore, this.enemyScore);
+          this.mp.broadcastRoundStart(nextRound);
+        }
+      }
+      return;
+    }
+
+    this.roundTimer = Math.max(0, this.roundTimer - dt);
+
+    let blueAlive = 0;
+    let redAlive = 0;
+    let blueHpTotal = 0;
+    let redHpTotal = 0;
+
+    for (const p of this.mp.lobbyState.players) {
+      const st = this.hostLivePlayers.get(p.id);
+      if (!st || !st.alive) continue;
+      if (p.team === 'blue') {
+        blueAlive += 1;
+        blueHpTotal += st.hp + st.shield;
+      } else {
+        redAlive += 1;
+        redHpTotal += st.hp + st.shield;
+      }
+    }
+
+    if (redAlive === 0 && blueAlive > 0) {
+      this.roundActive = false;
+      this.roundEndDelay = 4.0;
+      this.allyScore += 1;
+      this.mp.broadcastRoundEnd({
+        winner: 'blue',
+        reason: 'RED TEAM ELIMINATED',
+        blueScore: this.allyScore,
+        redScore: this.enemyScore,
+      });
+    } else if (blueAlive === 0 && redAlive > 0) {
+      this.roundActive = false;
+      this.roundEndDelay = 4.0;
+      this.enemyScore += 1;
+      this.mp.broadcastRoundEnd({
+        winner: 'red',
+        reason: 'BLUE TEAM ELIMINATED',
+        blueScore: this.allyScore,
+        redScore: this.enemyScore,
+      });
+    } else if (blueAlive === 0 && redAlive === 0) {
+      this.roundActive = false;
+      this.roundEndDelay = 4.0;
+      this.mp.broadcastRoundEnd({
+        winner: 'draw',
+        reason: 'MUTUAL ELIMINATION',
+        blueScore: this.allyScore,
+        redScore: this.enemyScore,
+      });
+    } else if (this.roundTimer <= 0) {
+      this.roundActive = false;
+      this.roundEndDelay = 4.0;
+      let winner: LobbyTeam | 'draw' = 'draw';
+      if (blueAlive > redAlive || (blueAlive === redAlive && blueHpTotal > redHpTotal)) {
+        winner = 'blue';
+        this.allyScore += 1;
+      } else if (redAlive > blueAlive || (blueAlive === redAlive && redHpTotal > blueHpTotal)) {
+        winner = 'red';
+        this.enemyScore += 1;
+      }
+      this.mp.broadcastRoundEnd({
+        winner,
+        reason: 'TIME EXPIRED',
+        blueScore: this.allyScore,
+        redScore: this.enemyScore,
+      });
+    }
+  }
+
+  private applyTdmRoundEnd(data: RoundEndPayload): void {
+    this.roundActive = false;
+    if (this.activeHeal) this.cancelActiveHeal(false);
+    this.allyScore = data.blueScore;
+    this.enemyScore = data.redScore;
+    if (data.winner === 'draw') {
+      this.sound.playRoundHorn(false);
+      this.hud.showBanner(data.reason, 'ROUND DRAW', 2.6);
+    } else {
+      const won = data.winner === this.tdmLocalTeam;
+      if (won) this.playerScore += 300;
+      this.sound.playRoundHorn(won);
+      const label = data.winner === 'blue' ? 'BLUE TEAM WINS ROUND' : 'RED TEAM WINS ROUND';
+      this.hud.showBanner(data.reason, label, 2.6);
+    }
+  }
+
+  private applyTdmMatchEnd(data: MatchEndPayload): void {
+    this.roundActive = false;
+    this.paused = true;
+    this.fireHeld = false;
+    this.adsHeld = false;
+    if (this.activeHeal) this.cancelActiveHeal(false);
+    this.player.clearKeys();
+    this.hud.setVisible(false);
+    if (document.pointerLockElement === this.renderer.domElement) {
+      document.exitPointerLock?.();
+    }
+
+    const victory = data.winner === this.tdmLocalTeam;
+    const title = document.getElementById('me-title')!;
+    const sub = document.getElementById('me-subtitle')!;
+    title.textContent = victory ? 'VICTORY' : 'DEFEAT';
+    title.classList.toggle('defeat', !victory);
+    sub.textContent = `${data.winner === 'blue' ? 'BLUE' : 'RED'} TEAM WINS // BLUE ${data.blueScore} — ${data.redScore} RED`;
+
+    const hsPct = this.playerKills > 0 ? Math.round((this.playerHeadshots / this.playerKills) * 100) : 0;
+    document.getElementById('me-kills')!.textContent = String(this.playerKills);
+    document.getElementById('me-hs')!.textContent = `${hsPct}%`;
+    document.getElementById('me-deaths')!.textContent = String(this.playerDeaths);
+    document.getElementById('me-score')!.textContent = String(this.playerScore);
+
+    const playAgainBtn = document.getElementById('btn-play-again');
+    const backMenuBtn = document.getElementById('btn-back-menu');
+    if (playAgainBtn) playAgainBtn.textContent = 'BACK TO LOBBY';
+    if (backMenuBtn) backMenuBtn.textContent = 'LEAVE LOBBY';
+
+    this.matchEndOverlay.classList.remove('hidden');
+  }
+
+  private exitTdmMatchToMenu(): void {
+    this.mp.leaveLobby(true);
+    this.isTdmMatch = false;
+    this.matchStarted = false;
+    this.roundActive = false;
+    this.paused = true;
+    this.fireHeld = false;
+    this.adsHeld = false;
+    this.activeHeal = null;
+    this.tdmBandages = 0;
+    this.tdmMedkits = 0;
+    this.player.clearKeys();
+    this.clearRemotePlayers();
+    this.clearLootDrops();
+    this.hud.setTdmMedSlotsVisible(false);
+    this.hud.setVisible(false);
+    this.tdmOverlay.classList.add('hidden');
+    this.matchEndOverlay.classList.add('hidden');
+    this.menuOverlay.classList.remove('hidden');
+    this.btnDeployLabel.textContent =
+      this.settings.map === 'factory' ? 'DEPLOY TO VIKENDI' : 'DEPLOY TO WAREHOUSE';
+    this.btnRestart.textContent = 'RESTART MATCH';
+    this.btnRestart.classList.add('hidden');
+    if (document.pointerLockElement === this.renderer.domElement) {
+      document.exitPointerLock?.();
+    }
+    this.setupShowcaseFrame();
   }
 
   /**
@@ -812,6 +2201,78 @@ class SunfireGame {
     }
 
     // 2. Test enemy hitboxes STRICTLY closer than hardWallDist (never hits enemies behind any wall/cover!)
+    const endPoint = shot.origin.clone().addScaledVector(shot.direction, shot.weapon.range);
+
+    if (this.isTdmMatch) {
+      const remoteMeshes: THREE.Object3D[] = [];
+      for (const rp of this.remotePlayers.values()) {
+        if (rp.alive && rp.team !== this.tdmLocalTeam) {
+          remoteMeshes.push(...rp.rig.hitMeshes);
+        }
+      }
+      this.raycaster.far = Math.max(0.02, hardWallDist - 0.015);
+      const remoteHits = remoteMeshes.length > 0 ? this.raycaster.intersectObjects(remoteMeshes, false) : [];
+
+      let hitTargetId: string | undefined;
+      let hitZone: 'head' | 'body' | 'leg' | undefined;
+      let hitPoint: THREE.Vector3 | undefined;
+      let hitDamage: number | undefined;
+      let hitWall = false;
+
+      if (remoteHits.length > 0 && remoteHits[0].distance < hardWallDist - 0.015) {
+        const hit = remoteHits[0];
+        endPoint.copy(hit.point);
+        const rpId = hit.object.userData.remotePlayerId as string | undefined;
+        const rp = rpId ? this.remotePlayers.get(rpId) : undefined;
+        if (rp && rp.alive) {
+          const zone = (hit.object.userData.hitZone as 'head' | 'body' | 'leg') || 'body';
+          const isHead = zone === 'head';
+          const dmg =
+            zone === 'head'
+              ? shot.weapon.damageHead
+              : zone === 'leg'
+              ? shot.weapon.damageLeg
+              : shot.weapon.damageBody;
+
+          rp.spottedTimer = 4.0;
+          rp.triggerHitFlash();
+          this.weapons.spawnImpact(hit.point, shot.direction.clone().negate(), true, isHead, false);
+          this.projectWallBloodSplatter(hit.point, shot.direction, isHead ? 0.96 : 0.68);
+          this.sound.playHit(isHead);
+          this.hud.showHitmarker(isHead);
+
+          hitTargetId = rp.id;
+          hitZone = zone;
+          hitPoint = hit.point.clone();
+          hitDamage = dmg;
+        }
+      } else if (wallPoint && wallNormal) {
+        endPoint.copy(wallPoint);
+        hitWall = true;
+        this.weapons.spawnImpact(wallPoint, wallNormal, false, false);
+      }
+
+      this.weapons.spawnTracer(shot.muzzleWorld, endPoint, 0xff6b24, 0.017);
+
+      const netShot: NetShotPayload = {
+        shooterId: this.mp.localPlayerId,
+        weaponId: shot.weapon.id,
+        weaponName: shot.weapon.name,
+        muzzle: { x: shot.muzzleWorld.x, y: shot.muzzleWorld.y, z: shot.muzzleWorld.z },
+        endPoint: { x: endPoint.x, y: endPoint.y, z: endPoint.z },
+        hitWall,
+        wallNormal:
+          hitWall && wallNormal ? { x: wallNormal.x, y: wallNormal.y, z: wallNormal.z } : undefined,
+        hitTargetId,
+        hitZone,
+        hitPoint: hitPoint ? { x: hitPoint.x, y: hitPoint.y, z: hitPoint.z } : undefined,
+        shotDir: { x: shot.direction.x, y: shot.direction.y, z: shot.direction.z },
+        damage: hitDamage,
+      };
+      this.mp.sendShot(netShot);
+      return;
+    }
+
     const enemyMeshes: THREE.Object3D[] = [];
     for (const agent of this.agents) {
       if (agent.alive && agent.team === 'enemy') {
@@ -820,8 +2281,6 @@ class SunfireGame {
     }
     this.raycaster.far = Math.max(0.02, hardWallDist - 0.015);
     const agentHits = enemyMeshes.length > 0 ? this.raycaster.intersectObjects(enemyMeshes, false) : [];
-
-    const endPoint = shot.origin.clone().addScaledVector(shot.direction, shot.weapon.range);
 
     if (agentHits.length > 0 && agentHits[0].distance < hardWallDist - 0.015) {
       const hit = agentHits[0];
@@ -1098,14 +2557,49 @@ class SunfireGame {
     document.getElementById('me-deaths')!.textContent = String(this.playerDeaths);
     document.getElementById('me-score')!.textContent = String(this.playerScore);
 
+    const playAgainBtn = document.getElementById('btn-play-again');
+    const backMenuBtn = document.getElementById('btn-back-menu');
+    if (playAgainBtn) playAgainBtn.textContent = 'DEPLOY AGAIN';
+    if (backMenuBtn) backMenuBtn.textContent = 'MAIN MENU';
+
     this.matchEndOverlay.classList.remove('hidden');
   }
 
   private updateSpotting(): void {
     if (!this.player.alive) return;
-    const eye = this.player.getEyePosition();
-    const fwd = new THREE.Vector3();
+    const eye = this.player.getEyePosition(this.tmpEyePos);
+    const fwd = this.tmpCamFwd;
     this.camera.getWorldDirection(fwd);
+
+    if (this.isTdmMatch) {
+      for (const rp of this.remotePlayers.values()) {
+        if (!rp.alive || rp.team === this.tdmLocalTeam) {
+          rp.losVisible = false;
+          continue;
+        }
+        const rpEye = rp.getEyePosition();
+        const dx = rpEye.x - eye.x;
+        const dy = rpEye.y - eye.y;
+        const dz = rpEye.z - eye.z;
+        const dist = Math.hypot(dx, dy, dz);
+        if (dist > 44) {
+          rp.losVisible = false;
+          continue;
+        }
+        const inv = 1 / Math.max(0.001, dist);
+        const dot = fwd.x * dx * inv + fwd.y * dy * inv + fwd.z * dz * inv;
+        if (dot > 0.32) {
+          const clear = hasClearSight(eye, rpEye, this.level.raycastMeshes, this.abilities.smokes);
+          rp.losVisible = clear || dist < 3.0;
+          if (clear && dot > 0.56 && dist <= 38) {
+            rp.spottedTimer = 2.6;
+          }
+        } else {
+          rp.losVisible = dist < 3.0;
+        }
+      }
+      return;
+    }
 
     for (const a of this.agents) {
       if (!a.alive || a.team !== 'enemy') continue;
@@ -1143,7 +2637,230 @@ class SunfireGame {
     // Animated burning braziers, flickering fluorescent tubes, exhaust fan & rising embers
     this.level.updateAtmosphere(dt, elapsed);
 
-    if (!this.paused) {
+    if (this.isTdmMatch) {
+      // Adaptive anti-lag safeguard: if a player's device dips below ~40 FPS in TDM, gracefully lower DPR to keep silky 60 FPS!
+      if (!this.tdmAdaptiveScaled) {
+        if (dt > 0.025) {
+          this.tdmSlowFrameAccum += dt;
+          if (this.tdmSlowFrameAccum > 1.8) {
+            this.tdmAdaptiveScaled = true;
+            const smoothDpr = Math.min(window.devicePixelRatio, 1.25);
+            this.renderer.setPixelRatio(smoothDpr);
+            this.composer?.setPixelRatio(smoothDpr);
+          }
+        } else {
+          this.tdmSlowFrameAccum = Math.max(0, this.tdmSlowFrameAccum - dt * 0.6);
+        }
+      }
+
+      // Live Online TDM: simulation, remote 3rd-person players, grenades & timer ALWAYS keep ticking even if ESC menu is open!
+      if (!this.paused) {
+        const healSpeedMult = this.activeHeal ? 0.45 : 1.0;
+        this.player.update(
+          dt,
+          this.level.colliders,
+          this.camera,
+          this.weapons.currentWeapon.moveSpeedMult * healSpeedMult,
+          this.weapons.recoilPitch,
+          this.weapons.recoilYaw,
+          this.level.mapBounds
+        );
+
+        if (this.player.alive && this.roundActive) {
+          this.handlePlayerShot();
+        } else {
+          this.fireJustPressed = false;
+        }
+      } else {
+        this.fireJustPressed = false;
+      }
+
+      this.updateTdmHealing(dt);
+
+      this.weapons.setVisible(this.player.alive);
+      this.weapons.update(
+        dt,
+        this.paused ? 0 : this.player.horizontalSpeed,
+        this.player.crouching,
+        this.player.grounded,
+        !this.paused && this.adsHeld && this.player.alive && !this.activeHeal
+      );
+
+      const playerEye = this.player.getEyePosition(this.tmpEyePos);
+      const camFwd = this.tmpCamFwd;
+      this.camera.getWorldDirection(camFwd);
+
+      this.abilities.update(
+        dt,
+        this.level.colliders,
+        this.level.raycastMeshes,
+        [],
+        playerEye,
+        camFwd,
+        (strength) => this.hud.triggerFlash(strength),
+        (pos) => this.weapons.spawnExplosion(pos, 1.15, 0xffb838),
+        (ev) => {
+          this.weapons.spawnExplosion(ev.pos, 2.35, 0xff5a18);
+          if (ev.playerShake > 0) this.player.addShake(ev.playerShake);
+          if (this.mp.isHost) {
+            this.handleHostTdmFragDetonation(ev.pos, ev.ownerId ?? this.mp.localPlayerId);
+          }
+        }
+      );
+
+      // Update all 3rd-person rigged remote human players (teammates + enemies)
+      for (const rp of this.remotePlayers.values()) {
+        rp.update(dt);
+      }
+
+      // Animate dropped utility loot crates & detect nearest crate within pickup range (F) — works mid-round & post-round!
+      let closestDrop: LootDrop | null = null;
+      let closestDistSq = TDM_LOOT_PICKUP_RANGE * TDM_LOOT_PICKUP_RANGE;
+      for (const drop of this.lootDrops.values()) {
+        drop.update(dt, elapsed);
+        if (this.player.alive) {
+          const dx = drop.pos.x - this.player.pos.x;
+          const dz = drop.pos.z - this.player.pos.z;
+          const dSq = dx * dx + dz * dz;
+          if (dSq < closestDistSq) {
+            closestDistSq = dSq;
+            closestDrop = drop;
+          }
+        }
+      }
+      this.nearestLootId = closestDrop ? closestDrop.id : null;
+
+      // 25 Hz Host Snapshot / Client Pose sync for silky smooth zero-stutter movement
+      this.netSyncAccum += dt;
+      if (this.netSyncAccum >= 0.04) {
+        this.netSyncAccum = 0;
+        if (this.mp.isHost) {
+          const selfState = this.hostLivePlayers.get(this.mp.localPlayerId);
+          if (selfState) {
+            selfState.x = this.player.pos.x;
+            selfState.y = this.player.pos.y;
+            selfState.z = this.player.pos.z;
+            selfState.yaw = this.player.yaw;
+            selfState.pitch = this.player.pitch;
+            selfState.crouching = this.player.crouching;
+            selfState.weaponSlot = this.weapons.currentSlot;
+          }
+          this.mp.broadcastSnapshot({
+            roundNumber: this.roundNumber,
+            roundTimer: this.roundTimer,
+            roundActive: this.roundActive,
+            blueScore: this.allyScore,
+            redScore: this.enemyScore,
+            players: [...this.hostLivePlayers.values()],
+          });
+        } else {
+          this.mp.sendLocalPose({
+            x: this.player.pos.x,
+            y: this.player.pos.y,
+            z: this.player.pos.z,
+            yaw: this.player.yaw,
+            pitch: this.player.pitch,
+            crouching: this.player.crouching,
+            weaponSlot: this.weapons.currentSlot,
+          });
+        }
+      }
+
+      this.spottingTimer -= dt;
+      if (this.spottingTimer <= 0) {
+        this.spottingTimer = 0.1;
+        this.updateSpotting();
+      }
+
+      if (this.mp.isHost) {
+        this.updateTdmHostRoundRules(dt);
+      } else if (this.roundActive) {
+        this.roundTimer = Math.max(0, this.roundTimer - dt);
+      }
+
+      if (!this.paused) {
+        const ammo = this.weapons.currentAmmo;
+        this.hud.updateVitals(this.player.hp, this.player.shield, false);
+        this.hud.updateWeapon(
+          this.weapons.currentWeapon,
+          this.weapons.currentSlot,
+          ammo.mag,
+          ammo.reserve,
+          this.weapons.isReloading,
+          this.weapons.reloadProgress
+        );
+        this.hud.updateAbilities(this.abilities.charges);
+        this.hud.updateMedkits(this.tdmBandages, this.tdmMedkits, this.activeHeal?.kind ?? null);
+        this.hud.updateLootPrompt(
+          closestDrop ? closestDrop.victimName : null,
+          closestDrop ? this.formatUtilitySummary(closestDrop.contents) : []
+        );
+        this.hud.updateCrosshair(this.weapons.currentSpread, this.weapons.isAds);
+        this.hud.updateZone(this.player.getZoneName(this.level.zones));
+
+        const bluePips: boolean[] = [];
+        const redPips: boolean[] = [];
+        if (this.tdmLocalTeam === 'blue') bluePips.push(this.player.alive);
+        else redPips.push(this.player.alive);
+        for (const rp of this.remotePlayers.values()) {
+          if (rp.team === 'blue') bluePips.push(rp.alive);
+          else redPips.push(rp.alive);
+        }
+
+        this.hud.updateScoreboard(
+          this.allyScore,
+          this.enemyScore,
+          `ROUND ${this.roundNumber}`,
+          this.roundTimer,
+          bluePips,
+          redPips
+        );
+        this.hud.tick(dt, this.player.hp <= 30 && this.player.alive);
+
+        // Floating overhead player names using 10 Hz cached LOS (ZERO per-frame raycasts -> zero lag!)
+        const nameplates: NameplateTarget[] = [];
+        const extraDots: Array<{ pos: THREE.Vector3; color: string }> = [];
+        for (const rp of this.remotePlayers.values()) {
+          if (!rp.alive) continue;
+          const isTeammate = rp.team === this.tdmLocalTeam;
+          if (isTeammate) {
+            extraDots.push({ pos: rp.pos, color: '#36f0df' });
+            nameplates.push({
+              id: rp.id,
+              name: rp.name,
+              team: rp.team,
+              hpRatio: rp.hp / Math.max(1, rp.maxHp),
+              headWorld: rp.getHeadWorldPosition(this.tmpHeadPos.clone()),
+            });
+          } else {
+            if (rp.spottedTimer > 0) {
+              extraDots.push({ pos: rp.pos, color: '#ff3d54' });
+            }
+            if (rp.losVisible) {
+              nameplates.push({
+                id: rp.id,
+                name: rp.name,
+                team: rp.team,
+                hpRatio: rp.hp / Math.max(1, rp.maxHp),
+                headWorld: rp.getHeadWorldPosition(this.tmpHeadPos.clone()),
+              });
+            }
+          }
+        }
+        // Floating 3D "[F] - LOOT" marker directly over every dropped utility crate!
+        for (const drop of this.lootDrops.values()) {
+          nameplates.push({
+            id: `loot_${drop.id}`,
+            name: `F - LOOT • ${drop.victimName}`,
+            team: 'loot',
+            hpRatio: 1,
+            headWorld: new THREE.Vector3(drop.pos.x, 0.92, drop.pos.z),
+          });
+        }
+        this.hud.updateNameplates(nameplates, this.camera);
+        this.minimap.render(this.player.pos, this.player.yaw, [], this.abilities.smokes, extraDots);
+      }
+    } else if (!this.paused) {
       this.player.update(
         dt,
         this.level.colliders,
@@ -1284,6 +3001,7 @@ class SunfireGame {
           nameplates.push({
             id: a.id,
             name: a.name,
+            team: 'blue',
             hpRatio: a.hp / Math.max(1, a.maxHp),
             headWorld: a.getHeadWorldPosition(this.tmpHeadPos.clone()),
           });

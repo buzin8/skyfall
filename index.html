@@ -79,7 +79,27 @@
           </svg>
           <span id="reload-text">RELOADING</span>
         </div>
+        <div id="heal-progress-wrap" class="hidden">
+          <div class="heal-head">
+            <span id="heal-label">APPLYING BANDAGE (+25 HP)</span>
+            <span id="heal-timer">5.0s</span>
+          </div>
+          <div class="heal-track">
+            <div id="heal-fill"></div>
+          </div>
+          <div class="heal-hint">FIRE OR SWAP TO CANCEL</div>
+        </div>
       </div>
+
+      <!-- Loot Pickup Prompt & Medical/Loot Toast (TDM Only) -->
+      <div id="loot-prompt" class="hidden">
+        <div class="loot-prompt-top">
+          <span class="loot-key">F</span>
+          <span id="loot-prompt-title">PICK UP UTILITIES</span>
+        </div>
+        <div id="loot-prompt-items"></div>
+      </div>
+      <div id="pickup-toast" class="hidden"></div>
 
       <!-- Center Round Status Banner -->
       <div id="round-banner" class="hidden">
@@ -144,6 +164,33 @@
             <div class="ab-name">SMOKE</div>
             <div class="ab-charges" id="ab-e-charges">●●</div>
           </div>
+          <div class="ability-slot tdm-med-slot hidden" id="ab-b" data-key="B">
+            <div class="ab-key">B</div>
+            <div class="ab-icon" style="display:flex;justify-content:center;align-items:center;height:18px;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#36f5b0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="3" y="8" width="18" height="8" rx="3" fill="rgba(54,245,176,0.18)"/>
+                <line x1="9" y1="8" x2="9" y2="16"/>
+                <line x1="15" y1="8" x2="15" y2="16"/>
+                <circle cx="12" cy="11" r="0.6" fill="#36f5b0"/>
+                <circle cx="12" cy="13" r="0.6" fill="#36f5b0"/>
+              </svg>
+            </div>
+            <div class="ab-name">BANDAGE</div>
+            <div class="ab-charges" id="ab-b-charges">×4</div>
+          </div>
+          <div class="ability-slot tdm-med-slot hidden" id="ab-m" data-key="M">
+            <div class="ab-key">M</div>
+            <div class="ab-icon" style="display:flex;justify-content:center;align-items:center;height:18px;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ff5268" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="3" y="6" width="18" height="14" rx="2.5" fill="rgba(255,82,104,0.2)"/>
+                <path d="M9 6V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V6"/>
+                <line x1="12" y1="9.5" x2="12" y2="16.5"/>
+                <line x1="8.5" y1="13" x2="15.5" y2="13"/>
+              </svg>
+            </div>
+            <div class="ab-name">MEDKIT</div>
+            <div class="ab-charges" id="ab-m-charges">×1</div>
+          </div>
         </div>
 
         <!-- Weapon & Ammo -->
@@ -171,10 +218,13 @@
         <span><b>WASD</b> Move</span>
         <span><b>SHIFT</b> Walk</span>
         <span><b>CTRL</b> Crouch</span>
-        <span><b>LMB / RMB</b> Fire / ADS</span>
-        <span><b>1 / 2</b> AKM / SCAR-L</span>
+        <span><b>LMB/RMB</b> Fire/ADS</span>
+        <span><b>1/2</b> AKM/SCAR-L</span>
         <span><b>R</b> Reload</span>
-        <span><b>Q E C</b> Ordnance</span>
+        <span><b>Q E C</b> Utils</span>
+        <span class="tdm-ctrl-hint hidden"><b>B</b> Bandage</span>
+        <span class="tdm-ctrl-hint hidden"><b>M</b> Medkit</span>
+        <span class="tdm-ctrl-hint tdm-loot-hint hidden"><b>F</b> - Loot</span>
         <span><b>ESC</b> Menu</span>
       </div>
     </div>
@@ -191,10 +241,11 @@
 
         <div class="menu-grid">
           <div class="menu-card">
-            <div class="card-label">SELECT MAP</div>
+            <div class="card-label">SELECT MAP / MULTIPLAYER</div>
             <div class="pill-row" id="map-pills" style="margin-bottom: 14px;">
               <button class="pill active" data-map="factory">VIKENDI</button>
               <button class="pill" data-map="foundry">WAREHOUSE</button>
+              <button class="pill pill-tdm" id="btn-open-tdm" type="button">TEAM DEATH MATCH</button>
             </div>
 
             <div class="card-label">GAME MODE</div>
@@ -263,6 +314,132 @@
 
             <div class="tactical-tip">
               <b>TIP:</b> Press <b>1 / 2</b> (or scroll) to swap between <b>AKM</b> and <b>SCAR-L</b>. Use <b>C (Frag)</b> to flush cover, <b>E (Smoke)</b> to block sightlines, and <b>Q (Flash)</b> before peeking.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Team Death Match Hosted Lobby Overlay -->
+    <div id="tdm-lobby-overlay" class="hidden">
+      <div class="menu-backdrop"></div>
+      <div class="tdm-shell">
+        <div class="tdm-topbar">
+          <div>
+            <div class="brand-tag">ONLINE HOSTED LOBBY // 1v1 TO 3v3</div>
+            <h2 class="tdm-title">TEAM DEATH MATCH</h2>
+          </div>
+          <button id="btn-tdm-close" class="btn-secondary" type="button">← BACK TO MENU</button>
+        </div>
+
+        <div id="tdm-error" class="tdm-error hidden"></div>
+
+        <!-- Step 1: Enter Name & Host or Join with Team Code -->
+        <div id="tdm-entry-view">
+          <div class="tdm-name-card">
+            <label for="tdm-player-name">PLAYER NAME <span class="tdm-req">(REQUIRED — DISPLAYED OVER YOUR HEAD)</span></label>
+            <input
+              id="tdm-player-name"
+              type="text"
+              maxlength="16"
+              autocomplete="off"
+              placeholder="ENTER YOUR NAME (E.G. VIPER)"
+            />
+          </div>
+
+          <div class="tdm-entry-grid">
+            <div class="menu-card tdm-panel">
+              <div class="card-label">HOST A LOBBY</div>
+              <p class="tdm-panel-desc">Create a private lobby with a Team Code. Pick Vikendi or Warehouse and invite up to 3 players per team.</p>
+              <div class="card-label" style="margin-top: 10px;">STARTING MAP</div>
+              <div class="pill-row" id="tdm-host-map-pills" style="margin-bottom: 16px;">
+                <button class="pill active" data-tdm-host-map="factory" type="button">VIKENDI</button>
+                <button class="pill" data-tdm-host-map="foundry" type="button">WAREHOUSE</button>
+              </div>
+              <button id="btn-tdm-host" class="btn-primary" type="button">HOST LOBBY</button>
+            </div>
+
+            <div class="menu-card tdm-panel">
+              <div class="card-label">JOIN WITH TEAM CODE</div>
+              <p class="tdm-panel-desc">Enter the 6-character Team Code shared by the lobby host to join Blue Team or Red Team.</p>
+              <div class="card-label" style="margin-top: 10px;">TEAM CODE</div>
+              <input
+                id="tdm-join-code"
+                class="tdm-code-input"
+                type="text"
+                maxlength="8"
+                autocomplete="off"
+                placeholder="E.G. K7M4P9"
+              />
+              <button id="btn-tdm-join" class="btn-primary" type="button" style="margin-top: 12px;">JOIN LOBBY</button>
+            </div>
+          </div>
+
+          <div class="tdm-loadout-bar">
+            <span>EQUAL LOADOUT:</span>
+            <b>1× AKM 7.62</b> • <b>1× SCAR-L</b> • <b>2× FRAG (C)</b> • <b>2× SMOKE (E)</b> • <b>2× FLASH (Q)</b> • <b>4× BANDAGE (B, 5s/+25HP)</b> • <b>1× MEDKIT (M, 10s/+75HP)</b> • <b>LOOT DEAD (F)</b>
+          </div>
+        </div>
+
+        <!-- Step 2: Live Hosted Room (Blue vs Red Teams, Map Toggle, Team Code & Start Match) -->
+        <div id="tdm-room-view" class="hidden">
+          <div class="tdm-room-header">
+            <div class="tdm-code-box">
+              <span class="tdm-code-label">TEAM CODE</span>
+              <span id="tdm-room-code">------</span>
+              <button id="btn-tdm-copy" class="tdm-copy-btn" type="button">COPY</button>
+            </div>
+
+            <div class="tdm-map-select">
+              <span class="tdm-code-label">ARENA MAP</span>
+              <div class="pill-row" id="tdm-room-map-pills">
+                <button class="pill active" data-tdm-room-map="factory" type="button">VIKENDI</button>
+                <button class="pill" data-tdm-room-map="foundry" type="button">WAREHOUSE</button>
+              </div>
+            </div>
+
+            <div class="tdm-status-wrap">
+              <span id="tdm-status-dot" class="tdm-dot"></span>
+              <span id="tdm-status-text">CONNECTING...</span>
+            </div>
+          </div>
+
+          <div class="tdm-teams-grid">
+            <div class="tdm-team-card blue">
+              <div class="tdm-team-head">
+                <div>
+                  <div class="tdm-team-title">BLUE TEAM</div>
+                  <div class="tdm-team-sub">BLUE UNIFORM // SOUTH SPAWN</div>
+                </div>
+                <div class="tdm-team-count" id="tdm-blue-count">0 / 3</div>
+              </div>
+              <div class="tdm-slot-list" id="tdm-blue-slots"></div>
+              <button id="btn-tdm-join-blue" class="tdm-team-btn blue" type="button">JOIN BLUE TEAM</button>
+            </div>
+
+            <div class="tdm-team-card red">
+              <div class="tdm-team-head">
+                <div>
+                  <div class="tdm-team-title">RED TEAM</div>
+                  <div class="tdm-team-sub">RED UNIFORM // NORTH SPAWN</div>
+                </div>
+                <div class="tdm-team-count" id="tdm-red-count">0 / 3</div>
+              </div>
+              <div class="tdm-slot-list" id="tdm-red-slots"></div>
+              <button id="btn-tdm-join-red" class="tdm-team-btn red" type="button">JOIN RED TEAM</button>
+            </div>
+          </div>
+
+          <div class="tdm-loadout-bar">
+            <span>ALL PLAYERS:</span>
+            <b>1× AKM</b> • <b>1× SCAR-L</b> • <b>2× FRAG</b> • <b>2× SMOKE</b> • <b>2× FLASH</b> • <b>4× BANDAGE (B)</b> • <b>1× MEDKIT (M)</b> • <b>LOOT (F)</b> • <b>1:30 TIMER</b>
+          </div>
+
+          <div class="tdm-room-footer">
+            <div id="tdm-ready-hint" class="tdm-ready-hint">NEED AT LEAST 1 PLAYER ON BLUE &amp; 1 ON RED</div>
+            <div class="tdm-footer-actions">
+              <button id="btn-tdm-start" class="btn-primary" type="button" disabled>START MATCH</button>
+              <button id="btn-tdm-leave" class="btn-secondary" type="button">LEAVE LOBBY</button>
             </div>
           </div>
         </div>
