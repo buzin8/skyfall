@@ -46,6 +46,8 @@ export interface AgentRig {
   leftFoot: THREE.Group;
   rightFoot: THREE.Group;
   weaponPivot: THREE.Group;
+  akmGroup?: THREE.Group;
+  scarGroup?: THREE.Group;
   muzzlePoint: THREE.Object3D;
   muzzleFlash: THREE.Group;
   rightGripTarget?: THREE.Object3D;
@@ -224,6 +226,8 @@ let sharedAkmSteelMat: THREE.MeshStandardMaterial;
 let sharedAkmWoodMat: THREE.MeshStandardMaterial;
 let sharedAkmMagMat: THREE.MeshStandardMaterial;
 let sharedAkmDarkMat: THREE.MeshStandardMaterial;
+let sharedScarTanMat: THREE.MeshStandardMaterial;
+let sharedScarTanDarkMat: THREE.MeshStandardMaterial;
 
 function ensureBotAkmMaterials(): void {
   if (sharedAkmMatsReady) return;
@@ -252,6 +256,16 @@ function ensureBotAkmMaterials(): void {
     color: 0x222730,
     roughness: 0.54,
     metalness: 0.28,
+  });
+  sharedScarTanMat = new THREE.MeshStandardMaterial({
+    color: 0xd8c39a,
+    roughness: 0.44,
+    metalness: 0.16,
+  });
+  sharedScarTanDarkMat = new THREE.MeshStandardMaterial({
+    color: 0x9b8662,
+    roughness: 0.52,
+    metalness: 0.22,
   });
 }
 
@@ -295,6 +309,8 @@ function buildBotMuzzleFlash(muzzlePoint: THREE.Object3D): THREE.Group {
  */
 function buildCompactBotAkm(): {
   weaponPivot: THREE.Group;
+  akmGroup: THREE.Group;
+  scarGroup: THREE.Group;
   muzzlePoint: THREE.Object3D;
   muzzleFlash: THREE.Group;
   rightGripTarget: THREE.Object3D;
@@ -302,9 +318,12 @@ function buildCompactBotAkm(): {
 } {
   ensureBotAkmMaterials();
   const weaponPivot = new THREE.Group();
-  // Snugly tucked into right shoulder pocket so wooden stock rests against shoulder & both hands wrap cleanly!
-  weaponPivot.position.set(-0.145, 1.3, 0.17);
-  weaponPivot.rotation.set(0.02, 0.06, 0);
+  // Centered squarely into right shoulder pocket aiming dead-straight forward (zero crooked barrel!)
+  weaponPivot.position.set(-0.15, 1.345, 0.225);
+  weaponPivot.rotation.set(0, 0, 0);
+
+  const akmGroup = new THREE.Group();
+  weaponPivot.add(akmGroup);
 
   // Tapered smooth wooden AKM buttstock tucked right into right shoulder
   const stockShape = new THREE.Shape();
@@ -325,7 +344,7 @@ function buildCompactBotAkm(): {
   const stock = new THREE.Mesh(stockGeo, sharedAkmWoodMat);
   stock.position.set(0, 0.0, -0.02);
   stock.castShadow = true;
-  weaponPivot.add(stock);
+  akmGroup.add(stock);
 
   // Smooth chamfered steel receiver + rounded ribbed dust cover
   const recGeo = new THREE.CylinderGeometry(0.034, 0.038, 0.31, 8);
@@ -334,12 +353,12 @@ function buildCompactBotAkm(): {
   const receiver = new THREE.Mesh(recGeo, sharedAkmSteelMat);
   receiver.position.set(0, 0.006, 0.13);
   receiver.castShadow = true;
-  weaponPivot.add(receiver);
+  akmGroup.add(receiver);
 
   const dustCover = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.028, 0.28, 8), sharedAkmDarkMat);
   dustCover.rotation.x = Math.PI / 2;
   dustCover.position.set(0, 0.044, 0.13);
-  weaponPivot.add(dustCover);
+  akmGroup.add(dustCover);
 
   // Rounded varnished wooden AKM handguard + upper gas tube cylinder
   const lowerHg = new THREE.Mesh(new THREE.CapsuleGeometry(0.027, 0.2, 5, 10), sharedAkmWoodMat);
@@ -347,53 +366,94 @@ function buildCompactBotAkm(): {
   lowerHg.scale.set(0.92, 1, 1.08);
   lowerHg.position.set(0, 0.004, 0.39);
   lowerHg.castShadow = true;
-  weaponPivot.add(lowerHg);
+  akmGroup.add(lowerHg);
 
   const upperGasTube = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.015, 0.22, 10), sharedAkmWoodMat);
   upperGasTube.rotation.x = Math.PI / 2;
   upperGasTube.position.set(0, 0.032, 0.38);
-  weaponPivot.add(upperGasTube);
+  akmGroup.add(upperGasTube);
 
   // Contoured pistol grip
   const grip = new THREE.Mesh(new THREE.CapsuleGeometry(0.018, 0.085, 4, 8), sharedAkmDarkMat);
   grip.position.set(0, -0.068, 0.03);
   grip.rotation.x = -0.28;
-  weaponPivot.add(grip);
+  akmGroup.add(grip);
 
   // Iconic curved 2-segment Bakelite 7.62 magazine
   const magTop = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.115, 0.062), sharedAkmMagMat);
   magTop.position.set(0, -0.078, 0.21);
   magTop.rotation.x = 0.2;
   magTop.castShadow = true;
-  weaponPivot.add(magTop);
+  akmGroup.add(magTop);
   const magBot = new THREE.Mesh(new THREE.BoxGeometry(0.031, 0.115, 0.06), sharedAkmMagMat);
   magBot.position.set(0, -0.172, 0.246);
   magBot.rotation.x = 0.42;
   magBot.castShadow = true;
-  weaponPivot.add(magBot);
+  akmGroup.add(magBot);
 
   // Smooth cylindrical barrel, gas block, slant brake & hooded AKM front sight post
   const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.014, 0.34, 10), sharedAkmSteelMat);
   barrel.rotation.x = Math.PI / 2;
   barrel.position.set(0, 0.016, 0.65);
-  weaponPivot.add(barrel);
+  akmGroup.add(barrel);
 
   const gasBlock = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.06, 8), sharedAkmDarkMat);
   gasBlock.rotation.x = Math.PI / 2;
   gasBlock.position.set(0, 0.032, 0.54);
-  weaponPivot.add(gasBlock);
+  akmGroup.add(gasBlock);
 
   const frontSight = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.048, 0.018), sharedAkmDarkMat);
   frontSight.position.set(0, 0.048, 0.74);
-  weaponPivot.add(frontSight);
+  akmGroup.add(frontSight);
 
-  // Exact IK grip anchors where the soldier's rigged hands lock cleanly onto the AKM!
+  // Compact third-person tan FDE SCAR-L (shown whenever a TDM player switches to slot 2!)
+  const scarGroup = new THREE.Group();
+  scarGroup.visible = false;
+  weaponPivot.add(scarGroup);
+
+  const scarStock = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.088, 0.23), sharedScarTanDarkMat);
+  scarStock.position.set(0, -0.01, -0.13);
+  scarGroup.add(scarStock);
+
+  const scarUpper = new THREE.Mesh(new THREE.BoxGeometry(0.056, 0.072, 0.54), sharedScarTanMat);
+  scarUpper.position.set(0, 0.018, 0.23);
+  scarUpper.castShadow = true;
+  scarGroup.add(scarUpper);
+
+  const scarRail = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.016, 0.52), sharedAkmDarkMat);
+  scarRail.position.set(0, 0.058, 0.23);
+  scarGroup.add(scarRail);
+
+  const scarHolo = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.052, 0.085), sharedScarTanMat);
+  scarHolo.position.set(0, 0.085, 0.14);
+  scarGroup.add(scarHolo);
+
+  const scarLower = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.046, 0.26), sharedScarTanDarkMat);
+  scarLower.position.set(0, -0.024, 0.12);
+  scarGroup.add(scarLower);
+
+  const scarGrip = new THREE.Mesh(new THREE.CapsuleGeometry(0.018, 0.082, 4, 8), sharedAkmDarkMat);
+  scarGrip.position.set(0, -0.068, 0.03);
+  scarGrip.rotation.x = -0.26;
+  scarGroup.add(scarGrip);
+
+  const scarMag = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.165, 0.062), sharedScarTanDarkMat);
+  scarMag.position.set(0, -0.105, 0.2);
+  scarMag.rotation.x = 0.12;
+  scarGroup.add(scarMag);
+
+  const scarBarrel = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.014, 0.34, 10), sharedAkmDarkMat);
+  scarBarrel.rotation.x = Math.PI / 2;
+  scarBarrel.position.set(0, 0.016, 0.64);
+  scarGroup.add(scarBarrel);
+
+  // Exact IK grip anchors where the soldier's rigged hands lock cleanly onto the rifle!
   const rightGripTarget = new THREE.Object3D();
   rightGripTarget.position.set(-0.008, -0.056, 0.035);
   weaponPivot.add(rightGripTarget);
 
   const leftGripTarget = new THREE.Object3D();
-  leftGripTarget.position.set(0.016, -0.016, 0.345);
+  leftGripTarget.position.set(0.014, -0.016, 0.34);
   weaponPivot.add(leftGripTarget);
 
   const muzzlePoint = new THREE.Object3D();
@@ -403,7 +463,7 @@ function buildCompactBotAkm(): {
   const muzzleFlash = buildBotMuzzleFlash(muzzlePoint);
   weaponPivot.add(muzzleFlash);
 
-  return { weaponPivot, muzzlePoint, muzzleFlash, rightGripTarget, leftGripTarget };
+  return { weaponPivot, akmGroup, scarGroup, muzzlePoint, muzzleFlash, rightGripTarget, leftGripTarget };
 }
 
 // Cached smooth vertex-contoured face, tactical mesh half-mask & wraparound light-blue ballistic glasses geometries!
@@ -884,8 +944,9 @@ function buildSkinnedSoldierRig(agentId: string, team: Team, style: AgentVisualS
   blindHalo.visible = false;
   modelPivot.add(blindHalo);
 
-  // Smooth sculpted Cryzen AKM shouldered cleanly with exact hand IK anchors!
-  const { weaponPivot, muzzlePoint, muzzleFlash, rightGripTarget, leftGripTarget } = buildCompactBotAkm();
+  // Smooth sculpted Cryzen AKM + SCAR-L shouldered cleanly with exact hand IK anchors!
+  const { weaponPivot, akmGroup, scarGroup, muzzlePoint, muzzleFlash, rightGripTarget, leftGripTarget } =
+    buildCompactBotAkm();
   modelPivot.add(weaponPivot);
 
   // Setup continuous 3-way blended skeletal AnimationMixer (Idle <-> Walk <-> Run with zero snaps!)
@@ -919,6 +980,8 @@ function buildSkinnedSoldierRig(agentId: string, team: Team, style: AgentVisualS
     leftFoot: dummy(),
     rightFoot: dummy(),
     weaponPivot,
+    akmGroup,
+    scarGroup,
     muzzlePoint,
     muzzleFlash,
     rightGripTarget,

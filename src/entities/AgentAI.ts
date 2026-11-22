@@ -847,18 +847,18 @@ export class TacticalAgent {
       this.rig.modelPivot.rotation.z = THREE.MathUtils.clamp(-this.smoothStrafe * 0.028, -0.1, 0.1);
       this.rig.modelPivot.rotation.x = THREE.MathUtils.clamp(spd * 0.018, 0, 0.08);
 
-      // Smoothly position shouldered AKM tucked snugly into right shoulder pocket with natural combat stride bob
-      const strideBobY = Math.sin(this.idlePhase * (spd > 0.4 ? 4.0 : 1.0)) * (spd > 0.4 ? 0.015 : 0.007);
-      const strideBobX = Math.cos(this.idlePhase * 2.0) * (spd > 0.4 ? 0.01 : 0.0025);
-      const runCant = wRun * 0.09;
+      // Smoothly position shouldered AKM tucked squarely into right shoulder pocket aiming dead-straight forward!
+      const strideBobY = Math.sin(this.idlePhase * (spd > 0.4 ? 4.0 : 1.0)) * (spd > 0.4 ? 0.014 : 0.006);
+      const strideBobX = Math.cos(this.idlePhase * 2.0) * (spd > 0.4 ? 0.008 : 0.002);
+      const runCant = wRun * 0.06;
       this.rig.weaponPivot.position.set(
-        -0.145 + strideBobX,
-        1.3 + strideBobY - this.crouchAmount * 0.05,
-        0.17 - this.recoilKick * 0.044
+        -0.15 + strideBobX,
+        1.345 + strideBobY - this.crouchAmount * 0.055,
+        0.225 - this.recoilKick * 0.042
       );
       this.rig.weaponPivot.rotation.set(
-        0.02 + runCant - this.recoilKick * 0.11,
-        0.06 + wRun * 0.05,
+        runCant - this.recoilKick * 0.1,
+        0,
         0
       );
 
@@ -991,9 +991,12 @@ export class TacticalAgent {
     const bones = this.rig.skBones;
     if (!bones || !this.rig.rightGripTarget || !this.rig.leftGripTarget) return;
 
-    // Slight natural right-handed bladed torso angle so left shoulder advances smoothly toward forend
+    // Natural right-handed bladed CQB stance: pull right shoulder back into stock & advance left shoulder toward handguard!
     if (bones.spine2) {
-      bones.spine2.rotation.y += 0.15;
+      bones.spine2.rotation.y -= 0.16;
+    }
+    if (bones.head) {
+      bones.head.rotation.y += 0.14;
     }
 
     this.rig.root.updateMatrixWorld(true);

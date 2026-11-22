@@ -128,9 +128,13 @@ export class RemotePlayer {
       this.deathMidQuats.clear();
       this.deathTargetQuats.clear();
       this.rig.mixer?.update(0);
-      this.rig.weaponPivot.position.set(-0.145, 1.3, 0.17);
-      this.rig.weaponPivot.rotation.set(0.02, 0.06, 0);
-      this.applySkinnedArmIK();
+      this.rig.weaponPivot.position.set(-0.15, 1.345, 0.225);
+      this.rig.weaponPivot.rotation.set(0, 0, 0);
+      if (this.rig.akmGroup && this.rig.scarGroup) {
+        this.rig.akmGroup.visible = this.weaponSlot !== 1;
+        this.rig.scarGroup.visible = this.weaponSlot === 1;
+      }
+      this.applySkinnedArmIK(0);
     }
   }
 
@@ -323,22 +327,30 @@ export class RemotePlayer {
       this.rig.modelPivot.rotation.z = THREE.MathUtils.clamp(-this.smoothStrafe * 0.028, -0.1, 0.1);
       this.rig.modelPivot.rotation.x = THREE.MathUtils.clamp(spd * 0.018, 0, 0.08);
 
-      const strideBobY = Math.sin(this.idlePhase * (spd > 0.4 ? 4.0 : 1.0)) * (spd > 0.4 ? 0.015 : 0.007);
-      const strideBobX = Math.cos(this.idlePhase * 2.0) * (spd > 0.4 ? 0.01 : 0.0025);
-      const runCant = wRun * 0.09;
-      const aimPitch = THREE.MathUtils.clamp(-this.pitch * 0.55, -0.45, 0.45);
+      const strideBobY = Math.sin(this.idlePhase * (spd > 0.4 ? 4.0 : 1.0)) * (spd > 0.4 ? 0.014 : 0.006);
+      const strideBobX = Math.cos(this.idlePhase * 2.0) * (spd > 0.4 ? 0.008 : 0.002);
+      const runCant = wRun * 0.06;
+      const aimPitch = THREE.MathUtils.clamp(-this.pitch * 0.34, -0.25, 0.25);
+      // Pivot cleanly around the right shoulder buttstock anchor so the rifle NEVER swings off-shoulder!
+      const stockYComp = -0.2 * Math.sin(aimPitch);
+
+      if (this.rig.akmGroup && this.rig.scarGroup) {
+        this.rig.akmGroup.visible = this.weaponSlot !== 1;
+        this.rig.scarGroup.visible = this.weaponSlot === 1;
+      }
+
       this.rig.weaponPivot.position.set(
-        -0.145 + strideBobX,
-        1.3 + strideBobY - this.crouchAmount * 0.05,
-        0.17 - this.recoilKick * 0.044
+        -0.15 + strideBobX,
+        1.345 + strideBobY + stockYComp - this.crouchAmount * 0.055,
+        0.225 - this.recoilKick * 0.042
       );
       this.rig.weaponPivot.rotation.set(
-        0.02 + runCant + aimPitch - this.recoilKick * 0.11,
-        0.06 + wRun * 0.05,
+        runCant + aimPitch - this.recoilKick * 0.1,
+        0,
         0
       );
 
-      this.applySkinnedArmIK();
+      this.applySkinnedArmIK(aimPitch);
     }
   }
 
@@ -346,29 +358,34 @@ export class RemotePlayer {
     scene.remove(this.rig.root);
   }
 
-  private applySkinnedArmIK(): void {
+  private applySkinnedArmIK(aimPitch: number): void {
     const b = this.rig.skBones;
     if (!b || !this.rig.rightGripTarget || !this.rig.leftGripTarget) return;
 
+    // Natural right-handed bladed CQB stance: right shoulder slightly back, left shoulder forward toward handguard!
     if (b.spine2) {
-      b.spine2.rotation.y += 0.15;
+      b.spine2.rotation.y -= 0.16;
+    }
+    if (b.head) {
+      b.head.rotation.y += 0.14;
+      b.head.rotation.x += aimPitch * 0.38;
     }
 
     this.rig.root.updateMatrixWorld(true);
-    this.rig.rightGripTarget.getWorldPosition(this.ikRightTarget);
-    this.rig.leftGripTarget.getWorldPosition(this.ikLeftTarget);
 
     if (b.rightArm && b.rightForeArm && b.rightHand) {
-      this.ikRightPole.set(-0.32, 0.96, -0.14);
-      this.rig.root.localToWorld(this.ikRightPole);
-      solveTwoBoneArmIK(b.rightArm, b.rightForeArm, b.rightHand, this.ikRightTarget, this.ikRightPole, 0.96);
+      this.rig.rightGripTarget.getWorldPosition(this.ikRightTarget);
+      // Tucked downward right elbow close beside right ribcage (zero chicken-wing flare!)
+      this.ikRightPole.set(-0.34, 0.62, -0.18).applyMatrix4(this.rig.modelPivot.matrixWorld);
+      solveTwoBoneArmIK(b.rightArm, b.rightForeArm, b.rightHand, this.ikRightTarget, this.ikRightPole, 1.0);
       b.rightHand.quaternion.set(0, 0, 0, 1);
     }
 
     if (b.leftArm && b.leftForeArm && b.leftHand) {
-      this.ikLeftPole.set(0.26, 0.9, 0.14);
-      this.rig.root.localToWorld(this.ikLeftPole);
-      solveTwoBoneArmIK(b.leftArm, b.leftForeArm, b.leftHand, this.ikLeftTarget, this.ikLeftPole, 0.96);
+      this.rig.leftGripTarget.getWorldPosition(this.ikLeftTarget);
+      // Tucked downward left elbow directly beneath the rifle handguard!
+      this.ikLeftPole.set(0.16, 0.56, 0.28).applyMatrix4(this.rig.modelPivot.matrixWorld);
+      solveTwoBoneArmIK(b.leftArm, b.leftForeArm, b.leftHand, this.ikLeftTarget, this.ikLeftPole, 1.0);
       b.leftHand.quaternion.set(0, 0, 0, 1);
     }
   }

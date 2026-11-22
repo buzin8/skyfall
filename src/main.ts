@@ -200,7 +200,8 @@ class SunfireGame {
   private localHealGraceTimer = 0;
   private netSyncAccum = 0;
   private tdmSlowFrameAccum = 0;
-  private tdmAdaptiveScaled = false;
+  private graphicsPreset: 'bloom' | 'perf' | 'laptop' = 'bloom';
+  private userPickedGraphics = false;
 
   private raycaster = new THREE.Raycaster();
   private roundDamageHistory = new Map<string, DamageHistoryEntry>();
@@ -302,6 +303,11 @@ class SunfireGame {
     this.bindTdmLobbyUI();
     this.bindInputs();
 
+    // Auto-select fast 60 FPS pipeline on laptops without a dedicated GPU (Intel UHD/Iris, integrated Radeon, software renderers)
+    if (this.detectIntegratedGpu()) {
+      this.applyGraphicsPreset('perf');
+    }
+
     window.addEventListener('resize', () => {
       const w = window.innerWidth;
       const h = window.innerHeight;
@@ -313,6 +319,45 @@ class SunfireGame {
     });
 
     requestAnimationFrame(this.loop);
+  }
+
+  private detectIntegratedGpu(): boolean {
+    try {
+      const gl = this.renderer.getContext();
+      const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+      const raw = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) || '') : '';
+      const r = raw.toLowerCase();
+      if (!r) return false;
+      // Dedicated desktop/gaming GPUs & Apple Silicon stay in full Bloom mode
+      if (/(rtx|gtx|radeon rx|geforce|quadro|arc a|apple m[1-9])/i.test(r)) {
+        return false;
+      }
+      // Laptops with integrated graphics or software renderers get instant 60 FPS pipeline
+      return /(intel|uhd|iris|hd graphics|swiftshader|microsoft basic|llvmpipe|mesa|radeon\(tm\) graphics|vega)/i.test(
+        r
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private applyGraphicsPreset(preset: 'bloom' | 'perf' | 'laptop'): void {
+    this.graphicsPreset = preset;
+    this.bloomEnabled = preset === 'bloom';
+    const dprCap = preset === 'bloom' ? 1.75 : preset === 'perf' ? 1.0 : 0.88;
+    const dpr = Math.min(window.devicePixelRatio, dprCap);
+    this.renderer.setPixelRatio(dpr);
+    this.composer?.setPixelRatio(dpr);
+
+    const wantShadows = preset !== 'laptop';
+    if (this.renderer.shadowMap.enabled !== wantShadows) {
+      this.renderer.shadowMap.enabled = wantShadows;
+      this.renderer.shadowMap.needsUpdate = true;
+    }
+
+    document.querySelectorAll<HTMLButtonElement>('#graphics-pills .pill').forEach((b) => {
+      b.classList.toggle('active', b.dataset.gfx === preset);
+    });
   }
 
   private setupPostProcessing(): void {
@@ -452,12 +497,9 @@ class SunfireGame {
 
     document.querySelectorAll<HTMLButtonElement>('#graphics-pills .pill').forEach((btn) => {
       btn.addEventListener('click', () => {
-        document.querySelectorAll('#graphics-pills .pill').forEach((b) => b.classList.remove('active'));
-        btn.classList.add('active');
-        this.bloomEnabled = btn.dataset.gfx === 'bloom';
-        const dprCap = this.bloomEnabled ? 2.0 : 1.5;
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, dprCap));
-        this.composer?.setPixelRatio(Math.min(window.devicePixelRatio, dprCap));
+        this.userPickedGraphics = true;
+        const preset = (btn.dataset.gfx as 'bloom' | 'perf' | 'laptop') || 'perf';
+        this.applyGraphicsPreset(preset);
       });
     });
 
@@ -2637,22 +2679,26 @@ class SunfireGame {
     // Animated burning braziers, flickering fluorescent tubes, exhaust fan & rising embers
     this.level.updateAtmosphere(dt, elapsed);
 
-    if (this.isTdmMatch) {
-      // Adaptive anti-lag safeguard: if a player's device dips below ~40 FPS in TDM, gracefully lower DPR to keep silky 60 FPS!
-      if (!this.tdmAdaptiveScaled) {
-        if (dt > 0.025) {
-          this.tdmSlowFrameAccum += dt;
-          if (this.tdmSlowFrameAccum > 1.8) {
-            this.tdmAdaptiveScaled = true;
-            const smoothDpr = Math.min(window.devicePixelRatio, 1.25);
-            this.renderer.setPixelRatio(smoothDpr);
-            this.composer?.setPixelRatio(smoothDpr);
+    // Universal Auto-60-FPS Laptop Booster: steps down Bloom -> Direct 1.0 DPR -> Laptop/No-GPU if FPS drops below ~38!
+    if (!this.userPickedGraphics && !this.paused && this.graphicsPreset !== 'laptop') {
+      if (dt > 0.0265) {
+        this.tdmSlowFrameAccum += dt;
+        if (this.tdmSlowFrameAccum > 1.35) {
+          this.tdmSlowFrameAccum = 0;
+          if (this.graphicsPreset === 'bloom') {
+            this.applyGraphicsPreset('perf');
+            this.hud.showToast('AUTO-BOOST: MAX 60 FPS MODE ENABLED', 'heal', 2.0);
+          } else {
+            this.applyGraphicsPreset('laptop');
+            this.hud.showToast('AUTO-BOOST: LAPTOP NO-GPU MODE ENABLED', 'heal', 2.0);
           }
-        } else {
-          this.tdmSlowFrameAccum = Math.max(0, this.tdmSlowFrameAccum - dt * 0.6);
         }
+      } else {
+        this.tdmSlowFrameAccum = Math.max(0, this.tdmSlowFrameAccum - dt * 0.5);
       }
+    }
 
+    if (this.isTdmMatch) {
       // Live Online TDM: simulation, remote 3rd-person players, grenades & timer ALWAYS keep ticking even if ESC menu is open!
       if (!this.paused) {
         const healSpeedMult = this.activeHeal ? 0.45 : 1.0;
