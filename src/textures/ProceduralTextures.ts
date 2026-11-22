@@ -17,6 +17,7 @@ export interface TextureLibrary {
   signSector: THREE.CanvasTexture;
   signWarning: THREE.CanvasTexture;
   emberSprite: THREE.CanvasTexture;
+  snowSprite: THREE.CanvasTexture;
   flashSprite: THREE.CanvasTexture;
   smokeSprite: THREE.CanvasTexture;
   rifleStencil: THREE.CanvasTexture;
@@ -29,6 +30,24 @@ export interface TextureLibrary {
   helmetShell: PBRTextureSet;
   operatorSkin: PBRTextureSet;
   tacticalGlove: PBRTextureSet;
+  cryzenBrick: THREE.CanvasTexture;
+  cryzenBrickPBR: PBRTextureSet;
+  cryzenSnowGround: THREE.CanvasTexture;
+  vikendiSnowPBR: PBRTextureSet;
+  cryzenConcrete: THREE.CanvasTexture;
+  cryzenContainerBlue: THREE.CanvasTexture;
+  cryzenContainerRed: THREE.CanvasTexture;
+  cryzenContainerGreen: THREE.CanvasTexture;
+  cryzenContainerBump: THREE.CanvasTexture;
+  cryzenWoodCrate: THREE.CanvasTexture;
+  cryzenWoodCrateBump: THREE.CanvasTexture;
+  signFactory: THREE.CanvasTexture;
+  bloodSplatter: THREE.CanvasTexture;
+  bloodWallSplatter: THREE.CanvasTexture;
+  bloodMistSprite: THREE.CanvasTexture;
+  mountainPineSlope: { map: THREE.CanvasTexture; bump: THREE.CanvasTexture };
+  mountainGraniteRock: { map: THREE.CanvasTexture; bump: THREE.CanvasTexture };
+  mountainGlacialSnow: { map: THREE.CanvasTexture; bump: THREE.CanvasTexture };
 }
 
 function makeCanvas(w: number, h: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
@@ -51,7 +70,7 @@ function toTexture(
   tex.minFilter = THREE.LinearMipmapLinearFilter;
   tex.magFilter = THREE.LinearFilter;
   tex.generateMipmaps = true;
-  tex.anisotropy = 8;
+  tex.anisotropy = 16;
   if (wrap) {
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.RepeatWrapping;
@@ -1186,6 +1205,707 @@ function buildTacticalGlovePBR(): PBRTextureSet {
   };
 }
 
+/**
+ * Razor-sharp 1024x1024 realistic vibrant Factory terracotta brick PBR set (albedo + bump + roughness):
+ * individually shaded clay bricks with kiln variation, beveled edges, deep mortar grooves,
+ * subtle architectural weathering, and crisp sun-yellow industrial stripe accents!
+ */
+function buildCryzenBrickPBR(): PBRTextureSet {
+  const size = 1024;
+  const [cCol, col] = makeCanvas(size, size);
+  const [cRough, rough] = makeCanvas(size, size);
+  const [cBump, bump] = makeCanvas(size, size);
+  const rand = mulberry32(3141);
+
+  // Deep recessed mortar bed
+  col.fillStyle = '#4c3834';
+  col.fillRect(0, 0, size, size);
+  rough.fillStyle = '#e8e8e8';
+  rough.fillRect(0, 0, size, size);
+  bump.fillStyle = '#242424';
+  bump.fillRect(0, 0, size, size);
+
+  const rows = 16;
+  const cols = 8;
+  const bh = size / rows;
+  const bw = size / cols;
+  const mortar = 5;
+
+  for (let r = 0; r < rows; r++) {
+    const offset = (r % 2) * (bw * 0.5);
+    for (let cx = -1; cx <= cols; cx++) {
+      const bx = cx * bw + offset + mortar * 0.5;
+      const by = r * bh + mortar * 0.5;
+      const w = bw - mortar;
+      const h = bh - mortar;
+
+      // Rich vibrant warm terracotta / burnt sienna / sun-baked brick variation!
+      const v = (rand() - 0.5) * 44;
+      const warmBoost = rand() > 0.72 ? 16 : 0;
+      const rr = Math.min(242, Math.max(95, Math.round(182 + v + warmBoost)));
+      const gg = Math.min(165, Math.max(58, Math.round(96 + v * 0.65 + warmBoost * 0.45)));
+      const bb = Math.min(138, Math.max(46, Math.round(78 + v * 0.5)));
+
+      const bg = col.createLinearGradient(bx, by, bx, by + h);
+      bg.addColorStop(0, `rgb(${Math.min(255, rr + 16)},${Math.min(255, gg + 12)},${Math.min(255, bb + 10)})`);
+      bg.addColorStop(0.55, `rgb(${rr},${gg},${bb})`);
+      bg.addColorStop(1, `rgb(${Math.max(0, rr - 22)},${Math.max(0, gg - 16)},${Math.max(0, bb - 14)})`);
+      col.fillStyle = bg;
+      col.fillRect(bx, by, w, h);
+
+      // Crisp top sunlit bevel highlight & bottom shadow edge on every brick
+      col.fillStyle = 'rgba(255, 224, 198, 0.24)';
+      col.fillRect(bx, by, w, 3);
+      col.fillStyle = 'rgba(32, 14, 10, 0.34)';
+      col.fillRect(bx, by + h - 3, w, 3);
+
+      // Subtle mineral kiln speckles inside brick
+      for (let s = 0; s < 5; s++) {
+        col.fillStyle = rand() > 0.5 ? 'rgba(255, 210, 175, 0.14)' : 'rgba(38, 16, 12, 0.18)';
+        col.fillRect(bx + rand() * (w - 8), by + rand() * (h - 6), 3 + rand() * 8, 2 + rand() * 4);
+      }
+
+      // Pixel-matched bump & roughness per brick!
+      const bVal = Math.round(182 + (rand() - 0.5) * 32);
+      bump.fillStyle = `rgb(${bVal},${bVal},${bVal})`;
+      bump.fillRect(bx + 2, by + 2, w - 4, h - 4);
+      bump.strokeStyle = '#929292';
+      bump.lineWidth = 2;
+      bump.strokeRect(bx + 1, by + 1, w - 2, h - 2);
+
+      const rVal = Math.round(168 + (rand() - 0.5) * 38);
+      rough.fillStyle = `rgb(${rVal},${rVal},${rVal})`;
+      rough.fillRect(bx, by, w, h);
+    }
+  }
+
+  // Crisp subtle vertical architectural rain-wash weathering streaks
+  for (let i = 0; i < 28; i++) {
+    const sx = rand() * size;
+    const sw = 10 + rand() * 24;
+    const sh = 180 + rand() * 420;
+    const sg = col.createLinearGradient(0, 0, 0, sh);
+    sg.addColorStop(0, 'rgba(24, 16, 18, 0.22)');
+    sg.addColorStop(1, 'rgba(24, 16, 18, 0)');
+    col.fillStyle = sg;
+    col.fillRect(sx, 0, sw, sh);
+  }
+
+  // Crisp painted vibrant golden-yellow & dark-slate Cryzen Factory industrial caution stripe band!
+  const bandY = 290;
+  const bandH = 68;
+  col.fillStyle = 'rgba(26, 32, 40, 0.88)';
+  col.fillRect(0, bandY - 6, size, bandH + 12);
+  col.fillStyle = '#f2cc26';
+  for (let x = -96; x < size + 96; x += 128) {
+    col.beginPath();
+    col.moveTo(x, bandY);
+    col.lineTo(x + 70, bandY);
+    col.lineTo(x + 42, bandY + bandH);
+    col.lineTo(x - 28, bandY + bandH);
+    col.closePath();
+    col.fill();
+  }
+  // Crisp metallic paint micro-sheen on stripe
+  rough.fillStyle = '#8e8e8e';
+  rough.fillRect(0, bandY - 6, size, bandH + 12);
+
+  return {
+    map: toTexture(cCol, 2, 1, true),
+    roughnessMap: toTexture(cRough, 2, 1, false),
+    bumpMap: toTexture(cBump, 2, 1, false),
+  };
+}
+
+/**
+ * Razor-sharp 1024x1024 BGMI Vikendi-style alpine snow ground PBR set (albedo + sparkle roughness + bump):
+ * fresh sunlit crisp white snowdrifts, cool icy-blue wind-sculpted ripples, subtle packed foot/tire
+ * tracks, crystalline micro-ice specular glints, and sparse frozen gravel flecks peeking through!
+ */
+function buildVikendiSnowPBR(): PBRTextureSet {
+  const size = 1024;
+  const [cCol, col] = makeCanvas(size, size);
+  const [cRough, rough] = makeCanvas(size, size);
+  const [cBump, bump] = makeCanvas(size, size);
+  const rand = mulberry32(2718);
+
+  // Fresh bright sunlit alpine snow base (clean white with soft cool sky tint!)
+  const baseGrad = col.createLinearGradient(0, 0, size, size);
+  baseGrad.addColorStop(0, '#eef6fd');
+  baseGrad.addColorStop(0.5, '#f7fbff');
+  baseGrad.addColorStop(1, '#e4f0fa');
+  col.fillStyle = baseGrad;
+  col.fillRect(0, 0, size, size);
+
+  // Mid-matte powdery snow base with crystal glints layered on top
+  rough.fillStyle = '#c4c4c4';
+  rough.fillRect(0, 0, size, size);
+  bump.fillStyle = '#808080';
+  bump.fillRect(0, 0, size, size);
+
+  // 1. Soft organic wind-blown snowdrift mounds & icy-blue shaded hollows (seamlessly wrapped!)
+  for (let i = 0; i < 85; i++) {
+    const x = rand() * size;
+    const y = rand() * size;
+    const rx = 64 + rand() * 175;
+    const ry = 24 + rand() * 72;
+    const ang = -0.28 + (rand() - 0.5) * 0.45;
+    const isCrest = i % 2 === 0;
+
+    for (const ox of [-size, 0, size]) {
+      for (const oy of [-size, 0, size]) {
+        const px = x + ox;
+        const py = y + oy;
+        if (px < -rx || px > size + rx || py < -rx || py > size + rx) continue;
+
+        col.save();
+        col.translate(px, py);
+        col.rotate(ang);
+        col.scale(1, ry / rx);
+        const sg = col.createRadialGradient(0, 0, 4, 0, 0, rx);
+        if (isCrest) {
+          sg.addColorStop(0, 'rgba(255, 255, 255, 0.78)');
+          sg.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        } else {
+          sg.addColorStop(0, 'rgba(142, 186, 226, 0.44)');
+          sg.addColorStop(1, 'rgba(142, 186, 226, 0)');
+        }
+        col.fillStyle = sg;
+        col.beginPath();
+        col.arc(0, 0, rx, 0, Math.PI * 2);
+        col.fill();
+        col.restore();
+
+        bump.save();
+        bump.translate(px, py);
+        bump.rotate(ang);
+        bump.scale(1, ry / rx);
+        const bg = bump.createRadialGradient(0, 0, 4, 0, 0, rx);
+        bg.addColorStop(0, isCrest ? 'rgba(225, 225, 225, 0.55)' : 'rgba(56, 56, 56, 0.48)');
+        bg.addColorStop(1, 'rgba(128, 128, 128, 0)');
+        bump.fillStyle = bg;
+        bump.beginPath();
+        bump.arc(0, 0, rx, 0, Math.PI * 2);
+        bump.fill();
+        bump.restore();
+      }
+    }
+  }
+
+  // 2. Subtle wind-carved sastrugi snow ripples (gives unmistakable BGMI Vikendi depth!)
+  for (let i = 0; i < 42; i++) {
+    const sx = rand() * size;
+    const sy = rand() * size;
+    const len = 90 + rand() * 190;
+    const wave = (rand() - 0.5) * 24;
+    col.strokeStyle = 'rgba(134, 178, 222, 0.30)';
+    col.lineWidth = 6 + rand() * 8;
+    col.lineCap = 'round';
+    col.beginPath();
+    col.moveTo(sx, sy);
+    col.quadraticCurveTo(sx + len * 0.5, sy + wave, sx + len, sy - wave * 0.4);
+    col.stroke();
+
+    bump.strokeStyle = 'rgba(65, 65, 65, 0.38)';
+    bump.lineWidth = 8;
+    bump.beginPath();
+    bump.moveTo(sx, sy);
+    bump.quadraticCurveTo(sx + len * 0.5, sy + wave, sx + len, sy - wave * 0.4);
+    bump.stroke();
+  }
+
+  // 3. Subtle packed boot / vehicle tracks stamped lightly into fresh snow
+  for (let t = 0; t < 2; t++) {
+    const tx = 240 + t * 520;
+    col.strokeStyle = 'rgba(146, 182, 214, 0.32)';
+    col.lineWidth = 22;
+    col.setLineDash([14, 10]);
+    col.beginPath();
+    col.moveTo(tx, 0);
+    col.bezierCurveTo(tx + 30, 340, tx - 26, 680, tx, size);
+    col.stroke();
+
+    bump.strokeStyle = 'rgba(42, 42, 42, 0.45)';
+    bump.lineWidth = 20;
+    bump.setLineDash([14, 10]);
+    bump.beginPath();
+    bump.moveTo(tx, 0);
+    bump.bezierCurveTo(tx + 30, 340, tx - 26, 680, tx, size);
+    bump.stroke();
+
+    // Slightly smoother packed ice sheen inside tracks
+    rough.strokeStyle = 'rgba(62, 62, 62, 0.45)';
+    rough.lineWidth = 20;
+    rough.setLineDash([14, 10]);
+    rough.beginPath();
+    rough.moveTo(tx, 0);
+    rough.bezierCurveTo(tx + 30, 340, tx - 26, 680, tx, size);
+    rough.stroke();
+  }
+  col.setLineDash([]);
+  bump.setLineDash([]);
+  rough.setLineDash([]);
+
+  // 4. Crisp sparkling snow crystal micro-glints & sparse tiny frozen earth/pebble flecks
+  for (let i = 0; i < 4200; i++) {
+    const x = rand() * size;
+    const y = rand() * size;
+    const s = 1.5 + rand() * 2.2;
+    if (rand() > 0.08) {
+      // Sparkling crystalline snow grain (low roughness glint + crisp white highlight!)
+      col.fillStyle = rand() > 0.4 ? 'rgba(255, 255, 255, 0.65)' : 'rgba(170, 206, 236, 0.26)';
+      col.fillRect(x, y, s, s);
+      if (rand() > 0.65) {
+        rough.fillStyle = 'rgba(28, 28, 28, 0.85)';
+        rough.fillRect(x, y, s, s);
+      }
+      bump.fillStyle = rand() > 0.5 ? 'rgba(180,180,180,0.32)' : 'rgba(90,90,90,0.28)';
+      bump.fillRect(x, y, s, s);
+    } else {
+      // Tiny dark alpine rock/soil speck peeking through thin snow (adds realistic Vikendi ground crunch!)
+      col.fillStyle = 'rgba(84, 96, 108, 0.34)';
+      col.fillRect(x, y, s * 1.4, s * 1.4);
+    }
+  }
+
+  return {
+    map: toTexture(cCol, 6, 6, true),
+    roughnessMap: toTexture(cRough, 6, 6, false),
+    bumpMap: toTexture(cBump, 6, 6, false),
+  };
+}
+
+/**
+ * Razor-sharp 1024x1024 architectural concrete loading slab texture with expansion joints & guide lines
+ */
+function buildCryzenConcrete(): THREE.CanvasTexture {
+  const size = 1024;
+  const [c, ctx] = makeCanvas(size, size);
+  const rand = mulberry32(9012);
+
+  ctx.fillStyle = '#8b99a8';
+  ctx.fillRect(0, 0, size, size);
+
+  // Fine mineral concrete grain & tonal panels
+  for (let i = 0; i < 160; i++) {
+    ctx.fillStyle = rand() > 0.5 ? 'rgba(255,255,255,0.06)' : 'rgba(28,38,50,0.08)';
+    ctx.fillRect(rand() * size, rand() * size, 24 + rand() * 110, 18 + rand() * 84);
+  }
+  for (let i = 0; i < 1800; i++) {
+    ctx.fillStyle = rand() > 0.5 ? 'rgba(235,244,255,0.08)' : 'rgba(20,28,38,0.12)';
+    ctx.fillRect(rand() * size, rand() * size, 2.5, 2.5);
+  }
+
+  // Sharp beveled slab seams & form-tie anchor bolts
+  ctx.strokeStyle = 'rgba(28, 36, 46, 0.65)';
+  ctx.lineWidth = 6;
+  ctx.strokeRect(3, 3, size - 6, size - 6);
+  ctx.beginPath();
+  ctx.moveTo(0, size * 0.5);
+  ctx.lineTo(size, size * 0.5);
+  ctx.moveTo(size * 0.5, 0);
+  ctx.lineTo(size * 0.5, size);
+  ctx.stroke();
+
+  ctx.strokeStyle = 'rgba(220, 234, 248, 0.25)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(8, 8, size - 16, size - 16);
+
+  // Painted bright safety-yellow concrete lane border trim
+  ctx.fillStyle = 'rgba(245, 198, 42, 0.72)';
+  ctx.fillRect(18, 0, 14, size);
+  ctx.fillRect(size - 32, 0, 14, size);
+
+  return toTexture(c, 2, 2, true);
+}
+
+/**
+ * Razor-sharp 1024x1024 vivid colourful corrugated ISO shipping container texture
+ * with 3D-shaded trapezoidal steel ribs, corner castings, weathered scuffs & crisp industrial stencils!
+ */
+function buildCryzenContainer(baseHex: string, darkHex: string, hiHex: string, label: string, sub: string): THREE.CanvasTexture {
+  const size = 1024;
+  const [c, ctx] = makeCanvas(size, size);
+  const rand = mulberry32(label.charCodeAt(0) * 97 + label.charCodeAt(4));
+
+  ctx.fillStyle = baseHex;
+  ctx.fillRect(0, 0, size, size);
+
+  // Crisp trapezoidal 3D-shaded steel corrugation ribs (aligned to cryzenContainerBump!)
+  const ribStep = 64;
+  for (let x = 0; x < size; x += ribStep) {
+    const rg = ctx.createLinearGradient(x, 0, x + ribStep, 0);
+    rg.addColorStop(0.0, darkHex);
+    rg.addColorStop(0.24, baseHex);
+    rg.addColorStop(0.45, hiHex);
+    rg.addColorStop(0.68, baseHex);
+    rg.addColorStop(0.92, darkHex);
+    rg.addColorStop(1.0, darkHex);
+    ctx.fillStyle = rg;
+    ctx.fillRect(x, 64, ribStep, size - 128);
+  }
+
+  // Heavy welded perimeter steel beams + bolted ISO corner castings
+  ctx.fillStyle = darkHex;
+  ctx.fillRect(0, 0, size, 64);
+  ctx.fillRect(0, size - 64, size, 64);
+  ctx.fillRect(0, 0, 52, size);
+  ctx.fillRect(size - 52, 0, 52, size);
+
+  ctx.fillStyle = hiHex;
+  ctx.fillRect(52, 62, size - 104, 5);
+  ctx.fillRect(52, size - 67, size - 104, 5);
+
+  // Corner steel reinforcement plates & rivet bolts
+  ctx.fillStyle = '#252d36';
+  for (const [cx, cy] of [[0, 0], [size - 72, 0], [0, size - 72], [size - 72, size - 72]]) {
+    ctx.fillRect(cx, cy, 72, 72);
+    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(cx + 6, cy + 6, 60, 60);
+  }
+
+  // Subtle realistic metallic edge scuffs & vertical patina streaks
+  for (let i = 0; i < 85; i++) {
+    ctx.fillStyle = rand() > 0.55 ? 'rgba(255, 255, 255, 0.12)' : 'rgba(12, 16, 22, 0.2)';
+    ctx.fillRect(60 + rand() * (size - 120), 70 + rand() * (size - 140), 4 + rand() * 34, 2 + rand() * 8);
+  }
+
+  // Crisp bright accent stripe + high-contrast industrial cargo stencil
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
+  ctx.font = '800 88px "Segoe UI", sans-serif';
+  ctx.fillText(label, 96, 220);
+  ctx.fillStyle = '#ffd63b';
+  ctx.fillRect(96, 242, 260, 12);
+  ctx.fillStyle = 'rgba(240, 248, 255, 0.82)';
+  ctx.font = '700 34px monospace';
+  ctx.fillText(sub, 96, 298);
+
+  return toTexture(c, 1, 1, true);
+}
+
+/**
+ * Pixel-aligned 1024x1024 bump map matching buildCryzenContainer steel corrugation ribs & beams!
+ */
+function buildCryzenContainerBump(): THREE.CanvasTexture {
+  const size = 1024;
+  const [c, ctx] = makeCanvas(size, size);
+
+  ctx.fillStyle = '#808080';
+  ctx.fillRect(0, 0, size, size);
+
+  const ribStep = 64;
+  for (let x = 0; x < size; x += ribStep) {
+    const bg = ctx.createLinearGradient(x, 0, x + ribStep, 0);
+    bg.addColorStop(0.0, '#2a2a2a');
+    bg.addColorStop(0.32, '#e8e8e8');
+    bg.addColorStop(0.58, '#f0f0f0');
+    bg.addColorStop(0.92, '#2a2a2a');
+    bg.addColorStop(1.0, '#2a2a2a');
+    ctx.fillStyle = bg;
+    ctx.fillRect(x, 64, ribStep, size - 128);
+  }
+
+  // Raised welded steel perimeter frame
+  ctx.fillStyle = '#dcdcdc';
+  ctx.fillRect(0, 0, size, 64);
+  ctx.fillRect(0, size - 64, size, 64);
+  ctx.fillRect(0, 0, 52, size);
+  ctx.fillRect(size - 52, 0, 52, size);
+
+  return toTexture(c, 1, 1, false);
+}
+
+/**
+ * Razor-sharp 1024x1024 warm cedar tactical wooden supply crate (albedo + matched bump map!)
+ */
+function buildCryzenWoodCratePBR(): { map: THREE.CanvasTexture; bump: THREE.CanvasTexture } {
+  const size = 1024;
+  const [cCol, col] = makeCanvas(size, size);
+  const [cBump, bump] = makeCanvas(size, size);
+  const rand = mulberry32(8421);
+
+  col.fillStyle = '#c88b48';
+  col.fillRect(0, 0, size, size);
+  bump.fillStyle = '#909090';
+  bump.fillRect(0, 0, size, size);
+
+  // Horizontal individual plank slats with crisp realistic wood-grain striations
+  const planks = 7;
+  const ph = (size - 160) / planks;
+  for (let p = 0; p < planks; p++) {
+    const py = 80 + p * ph;
+    const tone = (rand() - 0.5) * 26;
+    col.fillStyle = `rgb(${Math.round(202 + tone)}, ${Math.round(138 + tone * 0.7)}, ${Math.round(74 + tone * 0.45)})`;
+    col.fillRect(80, py + 4, size - 160, ph - 8);
+
+    // Fine wood grain lines per plank
+    for (let gy = py + 8; gy < py + ph - 6; gy += 6) {
+      col.fillStyle = rand() > 0.5 ? 'rgba(84, 42, 14, 0.14)' : 'rgba(255, 224, 174, 0.1)';
+      col.fillRect(80, gy, size - 160, 2.5);
+    }
+
+    // Recessed dark plank seam
+    col.fillStyle = '#4a2b12';
+    col.fillRect(80, py, size - 160, 5);
+    bump.fillStyle = '#202020';
+    bump.fillRect(80, py, size - 160, 6);
+  }
+
+  // Heavy beveled diagonal cross-brace
+  col.strokeStyle = '#965d28';
+  col.lineWidth = 74;
+  col.beginPath();
+  col.moveTo(86, 86);
+  col.lineTo(size - 86, size - 86);
+  col.stroke();
+
+  col.strokeStyle = 'rgba(255, 218, 165, 0.28)';
+  col.lineWidth = 5;
+  col.beginPath();
+  col.moveTo(116, 62);
+  col.lineTo(size - 62, size - 116);
+  col.stroke();
+
+  bump.strokeStyle = '#dedede';
+  bump.lineWidth = 76;
+  bump.beginPath();
+  bump.moveTo(86, 86);
+  bump.lineTo(size - 86, size - 86);
+  bump.stroke();
+
+  // Heavy outer timber frame
+  col.strokeStyle = '#7c4c20';
+  col.lineWidth = 84;
+  col.strokeRect(42, 42, size - 84, size - 84);
+  col.strokeStyle = '#4a2b12';
+  col.lineWidth = 6;
+  col.strokeRect(82, 82, size - 164, size - 164);
+
+  bump.strokeStyle = '#f0f0f0';
+  bump.lineWidth = 84;
+  bump.strokeRect(42, 42, size - 84, size - 84);
+
+  // Heavy riveted gunmetal corner armor brackets
+  col.fillStyle = '#38424d';
+  bump.fillStyle = '#ffffff';
+  for (const [cx, cy] of [[12, 12], [size - 104, 12], [12, size - 104], [size - 104, size - 104]]) {
+    col.fillRect(cx, cy, 92, 92);
+    col.strokeStyle = '#181e24';
+    col.lineWidth = 4;
+    col.strokeRect(cx + 4, cy + 4, 84, 84);
+    bump.fillRect(cx, cy, 92, 92);
+    // Corner bolts
+    col.fillStyle = '#8d9cb0';
+    for (const [bx, by] of [[24, 24], [68, 24], [24, 68], [68, 68]]) {
+      col.beginPath();
+      col.arc(cx + bx, cy + by, 6, 0, Math.PI * 2);
+      col.fill();
+    }
+    col.fillStyle = '#38424d';
+  }
+
+  // Crisp bright orange/white supply stencil
+  col.fillStyle = 'rgba(255, 146, 46, 0.85)';
+  col.fillRect(130, 126, 220, 16);
+  col.fillStyle = 'rgba(255, 248, 232, 0.85)';
+  col.font = '800 44px monospace';
+  col.fillText('ORD-07 // AMMO', 130, 192);
+
+  return {
+    map: toTexture(cCol, 1, 1, true, false),
+    bump: toTexture(cBump, 1, 1, false, false),
+  };
+}
+
+/**
+ * Forensic-grade 512x512 dark viscous oxblood arterial pool & cast-off floor splatter texture
+ * (thick deep coagulated crimson core, dark surface-tension meniscus rim, jagged velocity spines — ZERO cartoon neon red!)
+ */
+function buildBloodSplatter(): THREE.CanvasTexture {
+  const size = 512;
+  const [c, ctx] = makeCanvas(size, size);
+  const rand = mulberry32(6661);
+  const half = size / 2;
+
+  ctx.clearRect(0, 0, size, size);
+
+  // Irregular organic multi-lobed dark oxblood pool silhouette
+  ctx.save();
+  ctx.beginPath();
+  const lobes = 28;
+  for (let i = 0; i <= lobes; i++) {
+    const a = (i / lobes) * Math.PI * 2;
+    const wobble =
+      1 +
+      Math.sin(a * 3 + 0.6) * 0.14 +
+      Math.cos(a * 5 - 1.1) * 0.09 +
+      Math.sin(a * 9 + 2.2) * 0.05;
+    const rad = 112 * wobble;
+    const px = half + Math.cos(a) * rad;
+    const py = half + Math.sin(a) * rad;
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+
+  // Deep venous/arterial oxblood gradient with darker thickened meniscus edge
+  const g = ctx.createRadialGradient(half - 14, half - 10, 8, half, half, 134);
+  g.addColorStop(0.0, 'rgba(54, 2, 5, 0.99)');
+  g.addColorStop(0.42, 'rgba(92, 5, 9, 0.97)');
+  g.addColorStop(0.74, 'rgba(116, 8, 13, 0.93)');
+  g.addColorStop(0.92, 'rgba(42, 2, 4, 0.96)');
+  g.addColorStop(1.0, 'rgba(28, 1, 3, 0.0)');
+  ctx.fillStyle = g;
+  ctx.fill();
+  ctx.restore();
+
+  // Subtle wet surface tension inner clot depth variation
+  for (let i = 0; i < 16; i++) {
+    const a = rand() * Math.PI * 2;
+    const d = rand() * 76;
+    const rx = 18 + rand() * 34;
+    const ry = 12 + rand() * 24;
+    ctx.fillStyle = rand() > 0.4 ? 'rgba(36, 1, 3, 0.36)' : 'rgba(128, 10, 15, 0.28)';
+    ctx.beginPath();
+    ctx.ellipse(half + Math.cos(a) * d, half + Math.sin(a) * d, rx, ry, a, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Sharp radial arterial cast-off spines & violent impact streaks
+  for (let i = 0; i < 34; i++) {
+    const ang = rand() * Math.PI * 2;
+    const startR = 76 + rand() * 32;
+    const len = 24 + rand() * 92;
+    const w = 2.5 + rand() * 6.5;
+    ctx.save();
+    ctx.translate(half, half);
+    ctx.rotate(ang);
+    ctx.fillStyle = `rgba(${58 + Math.floor(rand() * 54)}, 3, 6, ${0.84 + rand() * 0.14})`;
+    ctx.beginPath();
+    ctx.moveTo(startR, -w);
+    ctx.quadraticCurveTo(startR + len * 0.55, -w * 0.35, startR + len, 0);
+    ctx.quadraticCurveTo(startR + len * 0.55, w * 0.35, startR, w);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Sharp teardrop satellite spatter droplets around the outer impact halo
+  for (let i = 0; i < 58; i++) {
+    const ang = rand() * Math.PI * 2;
+    const dist = 110 + rand() * 124;
+    const x = half + Math.cos(ang) * dist;
+    const y = half + Math.sin(ang) * dist;
+    const r = 1.8 + rand() * 6.2;
+    ctx.fillStyle = `rgba(${52 + Math.floor(rand() * 64)}, 3, 7, ${0.8 + rand() * 0.18})`;
+    ctx.beginPath();
+    ctx.ellipse(x, y, r * 1.9, r * 0.72, ang, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  return toTexture(c, 1, 1, true, false);
+}
+
+/**
+ * Forensic-grade 512x512 wall blood splatter with realistic gravity-driven dark arterial drips running straight down!
+ */
+function buildBloodWallSplatter(): THREE.CanvasTexture {
+  const size = 512;
+  const [c, ctx] = makeCanvas(size, size);
+  const rand = mulberry32(8419);
+  const cx = size * 0.5;
+  const cy = size * 0.34;
+
+  ctx.clearRect(0, 0, size, size);
+
+  // Violent asymmetric high-velocity exit-wound wall impact core
+  for (let i = 0; i < 24; i++) {
+    const ang = rand() * Math.PI * 2;
+    const dist = rand() * 66;
+    const rx = 12 + rand() * 34;
+    const ry = 8 + rand() * 24;
+    const rVal = 46 + Math.floor(rand() * 66);
+    ctx.fillStyle = `rgba(${rVal}, 3, 6, ${0.82 + rand() * 0.16})`;
+    ctx.beginPath();
+    ctx.ellipse(cx + Math.cos(ang) * dist, cy + Math.sin(ang) * dist, rx, ry, ang, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Sharp radial spray streaks around impact center
+  for (let i = 0; i < 42; i++) {
+    const ang = rand() * Math.PI * 2;
+    const dist = 42 + rand() * 115;
+    const x = cx + Math.cos(ang) * dist;
+    const y = cy + Math.sin(ang) * dist;
+    const r = 1.8 + rand() * 5.2;
+    ctx.fillStyle = `rgba(${54 + Math.floor(rand() * 62)}, 3, 6, ${0.78 + rand() * 0.2})`;
+    ctx.beginPath();
+    ctx.ellipse(x, y, r * 2.1, r * 0.65, ang, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Chilling gravity-pulled thick crimson rivulets dripping straight downward (+Y in canvas)
+  const dripCount = 9;
+  for (let d = 0; d < dripCount; d++) {
+    const startX = cx + (rand() - 0.5) * 145;
+    const startY = cy + (rand() - 0.2) * 58;
+    const dripLen = 95 + rand() * 215;
+    const baseW = 3.2 + rand() * 5.4;
+
+    const dg = ctx.createLinearGradient(startX, startY, startX, startY + dripLen);
+    dg.addColorStop(0, 'rgba(62, 3, 6, 0.96)');
+    dg.addColorStop(0.7, 'rgba(88, 5, 10, 0.92)');
+    dg.addColorStop(1, 'rgba(42, 2, 4, 0.98)');
+    ctx.fillStyle = dg;
+
+    ctx.beginPath();
+    ctx.moveTo(startX - baseW * 0.6, startY);
+    const sway = (rand() - 0.5) * 10;
+    ctx.quadraticCurveTo(startX + sway - baseW * 0.35, startY + dripLen * 0.55, startX + sway * 0.4 - baseW * 0.25, startY + dripLen);
+    ctx.arc(startX + sway * 0.4, startY + dripLen, baseW * 0.72, Math.PI, 0, true);
+    ctx.quadraticCurveTo(startX + sway + baseW * 0.35, startY + dripLen * 0.55, startX + baseW * 0.6, startY);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  return toTexture(c, 1, 1, true, false);
+}
+
+/**
+ * Subtle dark pressurized arterial fine-vapor flash sprite (brief high-caliber mist — NOT bright Holi smoke!)
+ */
+function buildBloodMistSprite(size = 128): THREE.CanvasTexture {
+  const [c, ctx] = makeCanvas(size, size);
+  const rand = mulberry32(9917);
+  const half = size / 2;
+
+  ctx.clearRect(0, 0, size, size);
+  const core = ctx.createRadialGradient(half, half, 2, half, half, half * 0.85);
+  core.addColorStop(0, 'rgba(98, 6, 11, 0.78)');
+  core.addColorStop(0.38, 'rgba(66, 4, 7, 0.52)');
+  core.addColorStop(0.75, 'rgba(38, 2, 4, 0.18)');
+  core.addColorStop(1, 'rgba(24, 1, 2, 0)');
+  ctx.fillStyle = core;
+  ctx.fillRect(0, 0, size, size);
+
+  for (let i = 0; i < 10; i++) {
+    const ang = rand() * Math.PI * 2;
+    const dist = 10 + rand() * 24;
+    const r = 6 + rand() * 14;
+    const px = half + Math.cos(ang) * dist;
+    const py = half + Math.sin(ang) * dist;
+    const lg = ctx.createRadialGradient(px, py, 1, px, py, r);
+    lg.addColorStop(0, 'rgba(78, 4, 8, 0.48)');
+    lg.addColorStop(1, 'rgba(32, 2, 3, 0)');
+    ctx.fillStyle = lg;
+    ctx.beginPath();
+    ctx.arc(px, py, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  return toTexture(c, 1, 1, true, false);
+}
+
 function buildRadialSprite(inner: string, mid: string, outer: string, size = 128): THREE.CanvasTexture {
   const [c, ctx] = makeCanvas(size, size);
   const half = size / 2;
@@ -1199,7 +1919,193 @@ function buildRadialSprite(inner: string, mid: string, outer: string, size = 128
   return toTexture(c, 1, 1, true, false);
 }
 
+function buildSnowflakeSprite(size = 128): THREE.CanvasTexture {
+  const [c, ctx] = makeCanvas(size, size);
+  const half = size / 2;
+
+  // Soft icy-blue outer halo so white flakes pop clearly against both bright sky and dark brick!
+  const glow = ctx.createRadialGradient(half, half, 2, half, half, half * 0.92);
+  glow.addColorStop(0, 'rgba(255, 255, 255, 1.0)');
+  glow.addColorStop(0.28, 'rgba(242, 250, 255, 0.92)');
+  glow.addColorStop(0.62, 'rgba(190, 224, 252, 0.36)');
+  glow.addColorStop(1, 'rgba(180, 218, 250, 0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, size, size);
+
+  // Crisp 6-pointed crystalline snowflake arms + side dendrites
+  ctx.save();
+  ctx.translate(half, half);
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.96)';
+  ctx.lineCap = 'round';
+  for (let i = 0; i < 6; i++) {
+    ctx.save();
+    ctx.rotate((i * Math.PI) / 3);
+    ctx.lineWidth = size * 0.055;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(0, -half * 0.78);
+    ctx.stroke();
+
+    // Twin crystalline side branches
+    ctx.lineWidth = size * 0.036;
+    for (const frac of [0.42, 0.64]) {
+      const by = -half * frac;
+      const blen = half * (0.24 - (frac - 0.4) * 0.25);
+      ctx.beginPath();
+      ctx.moveTo(0, by);
+      ctx.lineTo(-blen * 0.78, by - blen * 0.65);
+      ctx.moveTo(0, by);
+      ctx.lineTo(blen * 0.78, by - blen * 0.65);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  ctx.restore();
+
+  return toTexture(c, 1, 1, true, false);
+}
+
+/**
+ * Seamless 512x512 textured alpine mountain surface generators (pine forest slopes, striated granite rock, glacial snow)
+ * Designed to multiply cleanly with biome vertex colors so every mountain tier has rich organic detail!
+ */
+function buildMountainSurfaceTexture(
+  kind: 'pine' | 'granite' | 'glacial',
+  seed: number
+): { map: THREE.CanvasTexture; bump: THREE.CanvasTexture } {
+  const size = 512;
+  const [cCol, col] = makeCanvas(size, size);
+  const [cBump, bump] = makeCanvas(size, size);
+  const rand = mulberry32(seed);
+
+  // Neutral-light base so vertex colors tint accurately while preserving high-contrast texture detail
+  col.fillStyle = kind === 'pine' ? '#dce3dc' : kind === 'granite' ? '#d4d8de' : '#eef4fa';
+  col.fillRect(0, 0, size, size);
+  bump.fillStyle = '#808080';
+  bump.fillRect(0, 0, size, size);
+
+  if (kind === 'pine') {
+    // Organic evergreen canopy mottling + rocky ledges + winter moss texture
+    for (let i = 0; i < 480; i++) {
+      const x = rand() * size;
+      const y = rand() * size;
+      const r = 6 + rand() * 22;
+      const roll = rand();
+      col.fillStyle =
+        roll < 0.42
+          ? 'rgba(42, 76, 52, 0.34)'
+          : roll < 0.72
+          ? 'rgba(72, 108, 68, 0.28)'
+          : roll < 0.88
+          ? 'rgba(235, 245, 255, 0.38)'
+          : 'rgba(66, 62, 56, 0.32)';
+      col.beginPath();
+      col.arc(x, y, r, 0, Math.PI * 2);
+      col.fill();
+
+      bump.fillStyle = roll < 0.55 ? 'rgba(220, 220, 220, 0.42)' : 'rgba(40, 40, 40, 0.38)';
+      bump.beginPath();
+      bump.arc(x, y, r * 0.85, 0, Math.PI * 2);
+      bump.fill();
+    }
+    // Fine vertical pine-tree silhouette flecks across hillside
+    for (let i = 0; i < 650; i++) {
+      const x = rand() * size;
+      const y = rand() * size;
+      const h = 5 + rand() * 11;
+      const w = 2.5 + rand() * 4.5;
+      col.fillStyle = rand() > 0.35 ? 'rgba(24, 52, 34, 0.42)' : 'rgba(242, 250, 255, 0.36)';
+      col.beginPath();
+      col.moveTo(x, y - h);
+      col.lineTo(x - w, y);
+      col.lineTo(x + w, y);
+      col.closePath();
+      col.fill();
+    }
+  } else if (kind === 'granite') {
+    // Stratified diagonal rock bands, craggy crevices & warm mineral/rust streaks
+    for (let i = 0; i < 64; i++) {
+      const y = rand() * size;
+      const h = 8 + rand() * 26;
+      const slant = (rand() - 0.5) * 80;
+      const roll = rand();
+      col.fillStyle =
+        roll < 0.4
+          ? 'rgba(68, 76, 88, 0.36)'
+          : roll < 0.72
+          ? 'rgba(138, 122, 108, 0.28)'
+          : 'rgba(235, 244, 255, 0.34)';
+      col.beginPath();
+      col.moveTo(0, y);
+      col.lineTo(size, y + slant);
+      col.lineTo(size, y + slant + h);
+      col.lineTo(0, y + h);
+      col.closePath();
+      col.fill();
+
+      bump.fillStyle = roll < 0.5 ? 'rgba(225, 225, 225, 0.35)' : 'rgba(38, 38, 38, 0.4)';
+      bump.fillRect(0, y, size, h * 0.7);
+    }
+    // Sharp jagged vertical rock fissures & alpine scree fractures
+    for (let i = 0; i < 160; i++) {
+      const x = rand() * size;
+      const y = rand() * size;
+      const len = 24 + rand() * 88;
+      col.strokeStyle = rand() > 0.3 ? 'rgba(34, 42, 54, 0.45)' : 'rgba(245, 250, 255, 0.42)';
+      col.lineWidth = 1.5 + rand() * 3.5;
+      col.beginPath();
+      col.moveTo(x, y);
+      col.lineTo(x + (rand() - 0.5) * 32, y + len);
+      col.stroke();
+
+      bump.strokeStyle = 'rgba(20, 20, 20, 0.55)';
+      bump.lineWidth = 2.5;
+      bump.beginPath();
+      bump.moveTo(x, y);
+      bump.lineTo(x + (rand() - 0.5) * 32, y + len);
+      bump.stroke();
+    }
+  } else {
+    // Wind-carved glacial snow ridges, pale icy-blue crevasse grooves & rocky snow veins
+    for (let i = 0; i < 90; i++) {
+      const x = rand() * size;
+      const y = rand() * size;
+      const rx = 28 + rand() * 90;
+      const ry = 10 + rand() * 34;
+      const ang = (rand() - 0.5) * 0.65;
+      const isIce = rand() > 0.52;
+      col.fillStyle = isIce ? 'rgba(155, 195, 232, 0.34)' : 'rgba(255, 255, 255, 0.52)';
+      col.beginPath();
+      col.ellipse(x, y, rx, ry, ang, 0, Math.PI * 2);
+      col.fill();
+
+      bump.fillStyle = isIce ? 'rgba(65, 65, 65, 0.42)' : 'rgba(215, 215, 215, 0.44)';
+      bump.beginPath();
+      bump.ellipse(x, y, rx, ry, ang, 0, Math.PI * 2);
+      bump.fill();
+    }
+    for (let i = 0; i < 70; i++) {
+      const x = rand() * size;
+      const y = rand() * size;
+      col.strokeStyle = 'rgba(72, 92, 118, 0.34)';
+      col.lineWidth = 2 + rand() * 4;
+      col.beginPath();
+      col.moveTo(x, y);
+      col.lineTo(x + (rand() - 0.5) * 44, y + 32 + rand() * 64);
+      col.stroke();
+    }
+  }
+
+  return {
+    map: toTexture(cCol, 3, 2, true),
+    bump: toTexture(cBump, 3, 2, false),
+  };
+}
+
 export function createTextureLibrary(): TextureLibrary {
+  const cryzenBrickPBR = buildCryzenBrickPBR();
+  const vikendiSnowPBR = buildVikendiSnowPBR();
+  const cryzenCratePBR = buildCryzenWoodCratePBR();
   return {
     wetAsphalt: buildWetAsphaltPBR(),
     grimyConcrete: buildGrimyConcretePBR(),
@@ -1208,14 +2114,15 @@ export function createTextureLibrary(): TextureLibrary {
     hazardTrim: buildHazardTrim(),
     metalGrate: buildMetalGratePBR(),
     techCrate: buildTechCratePBR(),
-    signSector: buildIndustrialSign('FOUNDRY BAY 07', 'RESTRICTED // HIGH THERMAL', '#32e5ff'),
-    signWarning: buildIndustrialSign('DANGER // BLAST', 'SECTOR B // LIVE FIRE', '#ff5733'),
+    signSector: buildIndustrialSign('WAREHOUSE 07', 'LOADING BAY // RESTRICTED', '#32e5ff'),
+    signWarning: buildIndustrialSign('DANGER // BLAST', 'BAY B // LIVE FIRE', '#ff5733'),
     emberSprite: buildRadialSprite(
       'rgba(255,252,230,1)',
       'rgba(255,152,48,0.9)',
       'rgba(255,58,18,0.28)',
       64
     ),
+    snowSprite: buildSnowflakeSprite(128),
     flashSprite: buildRadialSprite(
       'rgba(255,255,245,1)',
       'rgba(255,168,62,0.85)',
@@ -1238,5 +2145,23 @@ export function createTextureLibrary(): TextureLibrary {
     helmetShell: buildHelmetShellPBR(),
     operatorSkin: buildOperatorSkinPBR(),
     tacticalGlove: buildTacticalGlovePBR(),
+    cryzenBrick: cryzenBrickPBR.map,
+    cryzenBrickPBR,
+    cryzenSnowGround: vikendiSnowPBR.map,
+    vikendiSnowPBR,
+    cryzenConcrete: buildCryzenConcrete(),
+    cryzenContainerBlue: buildCryzenContainer('#1568de', '#0b3c8a', '#4ea8ff', 'VK-07', 'CARGO // NORTH'),
+    cryzenContainerRed: buildCryzenContainer('#e02c34', '#8e141a', '#ff6b6e', 'DOCK-4', 'FUEL // DEPOT'),
+    cryzenContainerGreen: buildCryzenContainer('#1d9658', '#0d5a32', '#4fd98c', 'BAY-12', 'SUPPLY // WEST'),
+    cryzenContainerBump: buildCryzenContainerBump(),
+    cryzenWoodCrate: cryzenCratePBR.map,
+    cryzenWoodCrateBump: cryzenCratePBR.bump,
+    signFactory: buildIndustrialSign('VIKENDI DEPOT', 'BAY 01 // LOADING YARD', '#38eeff'),
+    bloodSplatter: buildBloodSplatter(),
+    bloodWallSplatter: buildBloodWallSplatter(),
+    bloodMistSprite: buildBloodMistSprite(128),
+    mountainPineSlope: buildMountainSurfaceTexture('pine', 4101),
+    mountainGraniteRock: buildMountainSurfaceTexture('granite', 4202),
+    mountainGlacialSnow: buildMountainSurfaceTexture('glacial', 4303),
   };
 }

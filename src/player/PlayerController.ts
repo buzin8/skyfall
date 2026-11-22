@@ -4,7 +4,7 @@ import { SoundEngine } from '../audio/SoundEngine';
 
 const STAND_EYE_HEIGHT = 1.66;
 const CROUCH_EYE_HEIGHT = 1.08;
-const PLAYER_RADIUS = 0.36;
+const PLAYER_RADIUS = 0.46;
 const STAND_HEIGHT = 1.82;
 const CROUCH_HEIGHT = 1.24;
 const GRAVITY = 23.0;
@@ -106,12 +106,6 @@ export class PlayerController {
     this.hp = Math.min(this.maxHp, this.hp + amount);
   }
 
-  public activateStim(): void {
-    this.stimTimer = 7.5;
-    this.heal(25);
-    this.sound.playStimActivate();
-  }
-
   public getEyePosition(out = new THREE.Vector3()): THREE.Vector3 {
     return out.set(this.pos.x, this.pos.y + this.eyeHeight, this.pos.z);
   }
@@ -136,7 +130,8 @@ export class PlayerController {
     camera: THREE.PerspectiveCamera,
     weaponSpeedMult: number,
     recoilPitchOffset: number,
-    recoilYawOffset: number
+    recoilYawOffset: number,
+    mapBounds?: { minX: number; maxX: number; minZ: number; maxZ: number }
   ): void {
     if (this.stimTimer > 0) {
       this.stimTimer = Math.max(0, this.stimTimer - dt);
@@ -215,9 +210,9 @@ export class PlayerController {
     // Gravity
     this.vel.y -= GRAVITY * dt;
 
-    // Integrate + resolve AABB collisions cleanly per axis with step-up support
+    // Integrate + resolve AABB collisions cleanly per axis with multi-pass depenetration (zero wall clipping!)
     const bodyHeight = this.crouching ? CROUCH_HEIGHT : STAND_HEIGHT;
-    this.moveAndCollide(dt, colliders, bodyHeight);
+    this.moveAndCollide(dt, colliders, bodyHeight, mapBounds);
 
     this.horizontalSpeed = Math.hypot(this.vel.x, this.vel.z);
 
@@ -253,44 +248,71 @@ export class PlayerController {
     );
   }
 
-  private moveAndCollide(dt: number, colliders: AABB[], bodyHeight: number): void {
-    // 1. Move X
-    this.pos.x += this.vel.x * dt;
+  private moveAndCollide(
+    dt: number,
+    colliders: AABB[],
+    bodyHeight: number,
+    mapBounds?: { minX: number; maxX: number; minZ: number; maxZ: number }
+  ): void {
+    // 1. Move X (use original step direction so zeroing vel.x never skips later overlapping colliders!)
+    const stepX = this.vel.x * dt;
+    this.pos.x += stepX;
     for (const box of colliders) {
-      if (this.overlaps(box, bodyHeight)) {
-        // Check if we can step smoothly onto low crate/curb (<= 0.48m)
-        const stepDelta = box.maxY - this.pos.y;
-        if (this.grounded && stepDelta > 0 && stepDelta <= 0.48 && !this.collidesAtY(box.maxY + 0.01, colliders, bodyHeight)) {
-          this.pos.y = box.maxY;
-        } else if (this.vel.x > 0) {
-          this.pos.x = box.minX - PLAYER_RADIUS - 0.001;
-          this.vel.x = 0;
-        } else if (this.vel.x < 0) {
-          this.pos.x = box.maxX + PLAYER_RADIUS + 0.001;
-          this.vel.x = 0;
-        }
+      if (!this.overlaps(box, bodyHeight)) continue;
+      const stepDelta = box.maxY - this.pos.y;
+      const boxHeight = box.maxY - box.minY;
+      if (
+        this.grounded &&
+        stepDelta > 0 &&
+        stepDelta <= 0.45 &&
+        boxHeight <= 0.65 &&
+        !this.collidesAtY(box.maxY + 0.01, colliders, bodyHeight)
+      ) {
+        this.pos.y = box.maxY;
+      } else if (stepX > 0) {
+        this.pos.x = box.minX - PLAYER_RADIUS - 0.002;
+        this.vel.x = 0;
+      } else if (stepX < 0) {
+        this.pos.x = box.maxX + PLAYER_RADIUS + 0.002;
+        this.vel.x = 0;
+      } else {
+        const cx = (box.minX + box.maxX) * 0.5;
+        this.pos.x = this.pos.x < cx ? box.minX - PLAYER_RADIUS - 0.002 : box.maxX + PLAYER_RADIUS + 0.002;
+        this.vel.x = 0;
       }
     }
 
     // 2. Move Z
-    this.pos.z += this.vel.z * dt;
+    const stepZ = this.vel.z * dt;
+    this.pos.z += stepZ;
     for (const box of colliders) {
-      if (this.overlaps(box, bodyHeight)) {
-        const stepDelta = box.maxY - this.pos.y;
-        if (this.grounded && stepDelta > 0 && stepDelta <= 0.48 && !this.collidesAtY(box.maxY + 0.01, colliders, bodyHeight)) {
-          this.pos.y = box.maxY;
-        } else if (this.vel.z > 0) {
-          this.pos.z = box.minZ - PLAYER_RADIUS - 0.001;
-          this.vel.z = 0;
-        } else if (this.vel.z < 0) {
-          this.pos.z = box.maxZ + PLAYER_RADIUS + 0.001;
-          this.vel.z = 0;
-        }
+      if (!this.overlaps(box, bodyHeight)) continue;
+      const stepDelta = box.maxY - this.pos.y;
+      const boxHeight = box.maxY - box.minY;
+      if (
+        this.grounded &&
+        stepDelta > 0 &&
+        stepDelta <= 0.45 &&
+        boxHeight <= 0.65 &&
+        !this.collidesAtY(box.maxY + 0.01, colliders, bodyHeight)
+      ) {
+        this.pos.y = box.maxY;
+      } else if (stepZ > 0) {
+        this.pos.z = box.minZ - PLAYER_RADIUS - 0.002;
+        this.vel.z = 0;
+      } else if (stepZ < 0) {
+        this.pos.z = box.maxZ + PLAYER_RADIUS + 0.002;
+        this.vel.z = 0;
+      } else {
+        const cz = (box.minZ + box.maxZ) * 0.5;
+        this.pos.z = this.pos.z < cz ? box.minZ - PLAYER_RADIUS - 0.002 : box.maxZ + PLAYER_RADIUS + 0.002;
+        this.vel.z = 0;
       }
     }
 
-    // 3. Move Y
-    this.pos.y += this.vel.y * dt;
+    // 3. Move Y (only resolve vertical contact on boxes we solidly overlap horizontally -> never snap onto walls!)
+    const stepY = this.vel.y * dt;
+    this.pos.y += stepY;
     this.grounded = false;
 
     if (this.pos.y <= 0) {
@@ -300,16 +322,56 @@ export class PlayerController {
     }
 
     for (const box of colliders) {
-      if (this.overlaps(box, bodyHeight)) {
-        if (this.vel.y <= 0) {
-          this.pos.y = box.maxY;
-          this.vel.y = 0;
-          this.grounded = true;
-        } else {
-          this.pos.y = box.minY - bodyHeight - 0.001;
-          this.vel.y = 0;
-        }
+      if (!this.overlaps(box, bodyHeight)) continue;
+      const penX = Math.min(this.pos.x + PLAYER_RADIUS - box.minX, box.maxX - (this.pos.x - PLAYER_RADIUS));
+      const penZ = Math.min(this.pos.z + PLAYER_RADIUS - box.minZ, box.maxZ - (this.pos.z - PLAYER_RADIUS));
+      if (penX < 0.025 || penZ < 0.025) continue;
+
+      if (stepY <= 0 && this.pos.y - stepY >= box.maxY - 0.12) {
+        this.pos.y = box.maxY;
+        this.vel.y = 0;
+        this.grounded = true;
+      } else if (stepY > 0 && this.pos.y + bodyHeight - stepY <= box.minY + 0.12) {
+        this.pos.y = box.minY - bodyHeight - 0.002;
+        this.vel.y = 0;
       }
+    }
+
+    // 4. Multi-pass minimum-penetration horizontal depenetration guarantee (impossible to wedge inside any wall/corner!)
+    for (let pass = 0; pass < 3; pass++) {
+      let pushed = false;
+      for (const box of colliders) {
+        if (!this.overlaps(box, bodyHeight)) continue;
+        const penLeft = this.pos.x + PLAYER_RADIUS - box.minX;
+        const penRight = box.maxX - (this.pos.x - PLAYER_RADIUS);
+        const penBack = this.pos.z + PLAYER_RADIUS - box.minZ;
+        const penFront = box.maxZ - (this.pos.z - PLAYER_RADIUS);
+        const minPen = Math.min(penLeft, penRight, penBack, penFront);
+        if (minPen <= 0) continue;
+
+        if (minPen === penLeft) {
+          this.pos.x = box.minX - PLAYER_RADIUS - 0.002;
+          if (this.vel.x > 0) this.vel.x = 0;
+        } else if (minPen === penRight) {
+          this.pos.x = box.maxX + PLAYER_RADIUS + 0.002;
+          if (this.vel.x < 0) this.vel.x = 0;
+        } else if (minPen === penBack) {
+          this.pos.z = box.minZ - PLAYER_RADIUS - 0.002;
+          if (this.vel.z > 0) this.vel.z = 0;
+        } else {
+          this.pos.z = box.maxZ + PLAYER_RADIUS + 0.002;
+          if (this.vel.z < 0) this.vel.z = 0;
+        }
+        pushed = true;
+      }
+      if (!pushed) break;
+    }
+
+    // 5. Hard outer arena perimeter clamp
+    if (mapBounds) {
+      const pad = PLAYER_RADIUS + 0.45;
+      this.pos.x = THREE.MathUtils.clamp(this.pos.x, mapBounds.minX + pad, mapBounds.maxX - pad);
+      this.pos.z = THREE.MathUtils.clamp(this.pos.z, mapBounds.minZ + pad, mapBounds.maxZ - pad);
     }
   }
 

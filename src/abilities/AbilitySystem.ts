@@ -3,28 +3,46 @@ import { AABB, SmokeCloud } from '../types';
 import { TacticalAgent, hasClearSight } from '../entities/AgentAI';
 import { SoundEngine } from '../audio/SoundEngine';
 
+export interface FragHitInfo {
+  agent: TacticalAgent;
+  damage: number;
+  killed: boolean;
+}
+
+export interface FragDetonationEvent {
+  pos: THREE.Vector3;
+  hits: FragHitInfo[];
+  playerDamage: number;
+  playerShake: number;
+}
+
 interface Projectile {
-  kind: 'flash' | 'smoke';
-  mesh: THREE.Mesh;
+  kind: 'frag' | 'flash' | 'smoke';
+  object: THREE.Object3D;
   light: THREE.PointLight;
+  blinkMat?: THREE.MeshBasicMaterial;
   pos: THREE.Vector3;
   vel: THREE.Vector3;
   fuse: number;
+  maxFuse: number;
+  bounceCooldown: number;
 }
 
-interface FlashBurst {
+interface BlastBurst {
   mesh: THREE.Mesh;
   light: THREE.PointLight;
   life: number;
   maxLife: number;
+  maxScale: number;
+  baseLight: number;
 }
 
 export class AbilitySystem {
-  public charges = { stim: 1, flash: 2, smoke: 2 };
+  public charges = { frag: 2, flash: 2, smoke: 2 };
   public smokes: SmokeCloud[] = [];
 
   private projectiles: Projectile[] = [];
-  private bursts: FlashBurst[] = [];
+  private bursts: BlastBurst[] = [];
   private group = new THREE.Group();
   private nextSmokeId = 1;
 
@@ -33,13 +51,14 @@ export class AbilitySystem {
   }
 
   public resetCharges(): void {
-    this.charges = { stim: 1, flash: 2, smoke: 2 };
+    this.charges = { frag: 2, flash: 2, smoke: 2 };
     this.clearEffects();
   }
 
   public clearEffects(): void {
     for (const p of this.projectiles) {
-      this.group.remove(p.mesh);
+      this.disposeObject(p.object);
+      this.group.remove(p.object);
       this.group.remove(p.light);
     }
     this.projectiles = [];
@@ -56,16 +75,103 @@ export class AbilitySystem {
     this.bursts = [];
   }
 
-  public useStim(onActivate: () => void): boolean {
-    if (this.charges.stim <= 0) return false;
-    this.charges.stim -= 1;
-    onActivate();
+  private disposeObject(obj: THREE.Object3D): void {
+    obj.traverse((child) => {
+      const m = child as THREE.Mesh;
+      if (m.isMesh) {
+        m.geometry.dispose();
+        if (Array.isArray(m.material)) m.material.forEach((mat) => mat.dispose());
+        else m.material.dispose();
+      }
+    });
+  }
+
+  /**
+   * Throws a physical M67-style tactical frag grenade (Key C).
+   * Bounces around corners off walls & floor and detonates after 1.55s with lethal blast radius!
+   */
+  public throwFrag(origin: THREE.Vector3, dir: THREE.Vector3): boolean {
+    if (this.charges.frag <= 0) return false;
+    this.charges.frag -= 1;
+    this.sound.playGrenadeThrow();
+
+    const fragGroup = new THREE.Group();
+
+    const bodyMat = new THREE.MeshStandardMaterial({
+      color: 0x3b4432,
+      roughness: 0.52,
+      metalness: 0.45,
+      emissive: new THREE.Color(0x161a12),
+      emissiveIntensity: 0.25,
+    });
+    const steelMat = new THREE.MeshStandardMaterial({
+      color: 0x262c34,
+      roughness: 0.35,
+      metalness: 0.82,
+    });
+    const bandMat = new THREE.MeshStandardMaterial({
+      color: 0xff3b24,
+      emissive: new THREE.Color(0xff2c16),
+      emissiveIntensity: 0.75,
+      roughness: 0.4,
+      metalness: 0.2,
+    });
+    const blinkMat = new THREE.MeshBasicMaterial({ color: 0xff4422 });
+
+    // Segmented fragmentation sphere body
+    const body = new THREE.Mesh(new THREE.IcosahedronGeometry(0.082, 1), bodyMat);
+    body.scale.set(0.95, 1.12, 0.95);
+    fragGroup.add(body);
+
+    // High-explosive crimson tactical stripe around grenade waist
+    const band = new THREE.Mesh(new THREE.TorusGeometry(0.078, 0.011, 6, 14), bandMat);
+    band.rotation.x = Math.PI / 2;
+    fragGroup.add(band);
+
+    // Top fuse neck & striker cap + side spoon lever
+    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.032, 0.045, 8), steelMat);
+    neck.position.y = 0.095;
+    fragGroup.add(neck);
+
+    const spoon = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.11, 0.012), steelMat);
+    spoon.position.set(0.055, 0.045, 0);
+    spoon.rotation.z = -0.35;
+    fragGroup.add(spoon);
+
+    // Armed blinking fuse beacon LED on top of striker
+    const led = new THREE.Mesh(new THREE.SphereGeometry(0.022, 8, 8), blinkMat);
+    led.position.y = 0.122;
+    fragGroup.add(led);
+
+    fragGroup.position.copy(origin).addScaledVector(dir, 0.55);
+
+    const light = new THREE.PointLight(0xff421c, 7, 7);
+    light.position.copy(fragGroup.position);
+
+    this.group.add(fragGroup);
+    this.group.add(light);
+
+    const vel = dir.clone().multiplyScalar(19.2);
+    vel.y += 3.2;
+
+    this.projectiles.push({
+      kind: 'frag',
+      object: fragGroup,
+      light,
+      blinkMat,
+      pos: fragGroup.position.clone(),
+      vel,
+      fuse: 1.55,
+      maxFuse: 1.55,
+      bounceCooldown: 0,
+    });
     return true;
   }
 
   public throwFlash(origin: THREE.Vector3, dir: THREE.Vector3): boolean {
     if (this.charges.flash <= 0) return false;
     this.charges.flash -= 1;
+    this.sound.playGrenadeThrow();
 
     const mesh = new THREE.Mesh(
       new THREE.CylinderGeometry(0.06, 0.06, 0.2, 8),
@@ -90,11 +196,13 @@ export class AbilitySystem {
 
     this.projectiles.push({
       kind: 'flash',
-      mesh,
+      object: mesh,
       light,
       pos: mesh.position.clone(),
       vel,
       fuse: 0.72,
+      maxFuse: 0.72,
+      bounceCooldown: 0,
     });
     return true;
   }
@@ -102,6 +210,7 @@ export class AbilitySystem {
   public throwSmoke(origin: THREE.Vector3, dir: THREE.Vector3): boolean {
     if (this.charges.smoke <= 0) return false;
     this.charges.smoke -= 1;
+    this.sound.playGrenadeThrow();
 
     const mesh = new THREE.Mesh(
       new THREE.CylinderGeometry(0.065, 0.065, 0.22, 8),
@@ -126,11 +235,13 @@ export class AbilitySystem {
 
     this.projectiles.push({
       kind: 'smoke',
-      mesh,
+      object: mesh,
       light,
       pos: mesh.position.clone(),
       vel,
       fuse: 1.4,
+      maxFuse: 1.4,
+      bounceCooldown: 0,
     });
     return true;
   }
@@ -143,58 +254,126 @@ export class AbilitySystem {
     playerEye: THREE.Vector3,
     cameraForward: THREE.Vector3,
     onPlayerFlashed: (strength: number) => void,
-    onFlashDetonate?: (pos: THREE.Vector3) => void
+    onFlashDetonate?: (pos: THREE.Vector3) => void,
+    onFragDetonate?: (ev: FragDetonationEvent) => void
   ): void {
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const p = this.projectiles[i];
       p.fuse -= dt;
-      p.vel.y -= 14.5 * dt;
-
-      const step = p.vel.clone().multiplyScalar(dt);
-      p.pos.add(step);
+      if (p.bounceCooldown > 0) p.bounceCooldown -= dt;
+      p.vel.y -= 15.2 * dt;
 
       let hitSurface = false;
-      if (p.pos.y <= 0.14) {
-        p.pos.y = 0.14;
-        p.vel.y *= -0.45;
-        p.vel.x *= 0.72;
-        p.vel.z *= 0.72;
-        hitSurface = true;
-      }
+      const r = 0.11;
 
+      // Axis-separated collision for crisp wall banking & natural floor rolling!
+      const prevX = p.pos.x;
+      p.pos.x += p.vel.x * dt;
       for (const b of colliders) {
         if (
-          p.pos.x + 0.12 > b.minX &&
-          p.pos.x - 0.12 < b.maxX &&
-          p.pos.y + 0.12 > b.minY &&
-          p.pos.y - 0.12 < b.maxY &&
-          p.pos.z + 0.12 > b.minZ &&
-          p.pos.z - 0.12 < b.maxZ
+          p.pos.x + r > b.minX &&
+          p.pos.x - r < b.maxX &&
+          p.pos.y + r > b.minY &&
+          p.pos.y - r < b.maxY &&
+          p.pos.z + r > b.minZ &&
+          p.pos.z - r < b.maxZ
         ) {
-          p.pos.sub(step);
-          p.vel.multiplyScalar(-0.48);
+          p.pos.x = prevX;
+          p.vel.x *= -0.52;
+          p.vel.z *= 0.82;
           hitSurface = true;
           break;
         }
       }
 
-      p.mesh.position.copy(p.pos);
-      p.mesh.rotation.x += dt * 11;
-      p.mesh.rotation.y += dt * 13;
+      const prevZ = p.pos.z;
+      p.pos.z += p.vel.z * dt;
+      for (const b of colliders) {
+        if (
+          p.pos.x + r > b.minX &&
+          p.pos.x - r < b.maxX &&
+          p.pos.y + r > b.minY &&
+          p.pos.y - r < b.maxY &&
+          p.pos.z + r > b.minZ &&
+          p.pos.z - r < b.maxZ
+        ) {
+          p.pos.z = prevZ;
+          p.vel.z *= -0.52;
+          p.vel.x *= 0.82;
+          hitSurface = true;
+          break;
+        }
+      }
+
+      const prevY = p.pos.y;
+      p.pos.y += p.vel.y * dt;
+      if (p.pos.y <= 0.12) {
+        p.pos.y = 0.12;
+        if (Math.abs(p.vel.y) > 1.3) {
+          hitSurface = true;
+          p.vel.y *= -0.42;
+        } else {
+          p.vel.y = 0;
+        }
+        p.vel.x *= 0.78;
+        p.vel.z *= 0.78;
+      } else {
+        for (const b of colliders) {
+          if (
+            p.pos.x + r > b.minX &&
+            p.pos.x - r < b.maxX &&
+            p.pos.y + r > b.minY &&
+            p.pos.y - r < b.maxY &&
+            p.pos.z + r > b.minZ &&
+            p.pos.z - r < b.maxZ
+          ) {
+            p.pos.y = prevY;
+            p.vel.y *= -0.42;
+            p.vel.x *= 0.78;
+            p.vel.z *= 0.78;
+            hitSurface = true;
+            break;
+          }
+        }
+      }
+
+      if (hitSurface && p.kind === 'frag' && p.bounceCooldown <= 0) {
+        const spd = p.vel.length();
+        if (spd > 1.2) {
+          this.sound.playGrenadeBounce(Math.min(1, spd / 11));
+          p.bounceCooldown = 0.09;
+        }
+      }
+
+      p.object.position.copy(p.pos);
+      const spinMult = Math.min(1.5, p.vel.length() * 0.16);
+      p.object.rotation.x += dt * (4 + spinMult * 9);
+      p.object.rotation.y += dt * (5 + spinMult * 10);
       p.light.position.copy(p.pos);
 
-      const shouldPop = p.kind === 'flash' ? p.fuse <= 0 : hitSurface || p.fuse <= 0;
+      // Escalating red-orange armed blink pulse on frag grenade as detonation approaches!
+      if (p.kind === 'frag' && p.blinkMat) {
+        const progress = 1 - Math.max(0, p.fuse / p.maxFuse);
+        const freq = 6 + progress * 24;
+        const pulse = Math.sin(performance.now() * 0.001 * freq * Math.PI) > 0;
+        p.blinkMat.color.setHex(pulse ? 0xff4518 : 0x551208);
+        p.light.intensity = pulse ? 10 + progress * 12 : 1.5;
+      }
+
+      const shouldPop = p.kind === 'smoke' ? hitSurface || p.fuse <= 0 : p.fuse <= 0;
       if (shouldPop) {
-        if (p.kind === 'flash') {
+        if (p.kind === 'frag') {
+          const ev = this.detonateFrag(p.pos, levelMeshes, agents, playerEye);
+          onFragDetonate?.(ev);
+        } else if (p.kind === 'flash') {
           this.detonateFlash(p.pos, levelMeshes, agents, playerEye, cameraForward, onPlayerFlashed);
           onFlashDetonate?.(p.pos);
         } else {
           this.deploySmoke(p.pos);
         }
-        this.group.remove(p.mesh);
+        this.disposeObject(p.object);
+        this.group.remove(p.object);
         this.group.remove(p.light);
-        p.mesh.geometry.dispose();
-        (p.mesh.material as THREE.Material).dispose();
         this.projectiles.splice(i, 1);
       }
     }
@@ -210,9 +389,9 @@ export class AbilitySystem {
         this.bursts.splice(i, 1);
       } else {
         const t = b.life / b.maxLife;
-        b.mesh.scale.setScalar(1 + (1 - t) * 5.8);
-        (b.mesh.material as THREE.MeshBasicMaterial).opacity = t * 0.92;
-        b.light.intensity = t * 48;
+        b.mesh.scale.setScalar(1 + (1 - t) * b.maxScale);
+        (b.mesh.material as THREE.MeshBasicMaterial).opacity = t * 0.9;
+        b.light.intensity = t * b.baseLight;
       }
     }
 
@@ -233,6 +412,75 @@ export class AbilitySystem {
         this.smokes.splice(i, 1);
       }
     }
+  }
+
+  private detonateFrag(
+    pos: THREE.Vector3,
+    levelMeshes: THREE.Object3D[],
+    agents: TacticalAgent[],
+    playerEye: THREE.Vector3
+  ): FragDetonationEvent {
+    const blastOrigin = pos.clone().add(new THREE.Vector3(0, 0.24, 0));
+    const playerDist = blastOrigin.distanceTo(playerEye);
+    const distAtten = THREE.MathUtils.clamp(1.25 - playerDist / 34, 0.25, 1.0);
+    this.sound.playFragExplosion(distAtten);
+
+    // Expanding fiery shockwave flash sphere + intense detonation light
+    const shockSphere = new THREE.Mesh(
+      new THREE.SphereGeometry(0.55, 16, 14),
+      new THREE.MeshBasicMaterial({
+        color: 0xff7c24,
+        transparent: true,
+        opacity: 0.88,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      })
+    );
+    shockSphere.position.copy(blastOrigin);
+    const blastLight = new THREE.PointLight(0xff641c, 68, 30, 1.3);
+    blastLight.position.copy(blastOrigin);
+    this.group.add(shockSphere);
+    this.group.add(blastLight);
+    this.bursts.push({
+      mesh: shockSphere,
+      light: blastLight,
+      life: 0.42,
+      maxLife: 0.42,
+      maxScale: 9.5,
+      baseLight: 68,
+    });
+
+    const blastRadius = 7.6;
+    const maxEnemyDamage = 148;
+    const hits: FragHitInfo[] = [];
+
+    for (const agent of agents) {
+      if (!agent.alive || agent.team === 'ally') continue;
+      const targetCenter = agent.pos.clone().add(new THREE.Vector3(0, 1.0, 0));
+      const dist = blastOrigin.distanceTo(targetCenter);
+      if (dist > blastRadius) continue;
+
+      // Solid walls block shrapnel; small low cover or open line deals full explosive damage!
+      const clearChest = hasClearSight(blastOrigin, targetCenter, levelMeshes, []);
+      const clearHead = clearChest || hasClearSight(blastOrigin, agent.getEyePosition(), levelMeshes, []);
+      if (!clearHead) continue;
+
+      const falloff = 1 - Math.pow(dist / blastRadius, 1.25);
+      const dmg = Math.round(Math.max(24, maxEnemyDamage * falloff * (clearChest ? 1.0 : 0.72)));
+      const blastDir = new THREE.Vector3().subVectors(targetCenter, blastOrigin).normalize();
+      const res = agent.takeDamage(dmg, blastDir, false);
+      hits.push({ agent, damage: dmg, killed: res.killed });
+    }
+
+    // Distance-scaled concussion camera shake + reduced self-splash damage if standing right on grenade
+    const playerShake = playerDist < 15 ? THREE.MathUtils.lerp(0.16, 0.025, playerDist / 15) : 0;
+    let playerDamage = 0;
+    if (playerDist < 5.5 && hasClearSight(blastOrigin, playerEye, levelMeshes, [])) {
+      const selfFalloff = 1 - playerDist / 5.5;
+      playerDamage = Math.round(45 * selfFalloff);
+    }
+
+    return { pos: blastOrigin, hits, playerDamage, playerShake };
   }
 
   private detonateFlash(
@@ -260,7 +508,14 @@ export class AbilitySystem {
     light.position.copy(pos);
     this.group.add(mesh);
     this.group.add(light);
-    this.bursts.push({ mesh, light, life: 0.38, maxLife: 0.38 });
+    this.bursts.push({
+      mesh,
+      light,
+      life: 0.38,
+      maxLife: 0.38,
+      maxScale: 5.8,
+      baseLight: 48,
+    });
 
     for (const agent of agents) {
       if (!agent.alive || agent.team === 'ally') continue;

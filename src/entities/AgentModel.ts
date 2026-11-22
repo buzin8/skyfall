@@ -1,11 +1,39 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { Team } from '../types';
 import { PBRTextureSet, TextureLibrary } from '../textures/ProceduralTextures';
+import {
+  buildBrushedGunmetalTexture,
+  buildRefinedFaceTexture,
+  buildSmoothAkWoodTexture,
+  smoothGeometryNormals,
+} from '../utils/MeshSmoothing';
 
 export type AgentVisualStyle = 'ember' | 'duelist' | 'striker' | 'sentinel';
 
+export interface SkinnedRigBones {
+  hips?: THREE.Object3D;
+  spine?: THREE.Object3D;
+  spine1?: THREE.Object3D;
+  spine2?: THREE.Object3D;
+  head?: THREE.Object3D;
+  rightArm?: THREE.Object3D;
+  rightForeArm?: THREE.Object3D;
+  rightHand?: THREE.Object3D;
+  leftArm?: THREE.Object3D;
+  leftForeArm?: THREE.Object3D;
+  leftHand?: THREE.Object3D;
+  leftUpLeg?: THREE.Object3D;
+  rightUpLeg?: THREE.Object3D;
+  leftLeg?: THREE.Object3D;
+  rightLeg?: THREE.Object3D;
+}
+
 export interface AgentRig {
+  isSkinned: boolean;
   root: THREE.Group;
+  modelPivot: THREE.Group;
   hips: THREE.Group;
   torso: THREE.Group;
   headGroup: THREE.Group;
@@ -18,9 +46,664 @@ export interface AgentRig {
   weaponPivot: THREE.Group;
   muzzlePoint: THREE.Object3D;
   muzzleFlash: THREE.Group;
+  rightGripTarget?: THREE.Object3D;
+  leftGripTarget?: THREE.Object3D;
   blindHalo: THREE.Mesh;
   hitMeshes: THREE.Mesh[];
   flashMaterials: THREE.MeshStandardMaterial[];
+  mixer?: THREE.AnimationMixer;
+  actions?: {
+    idle: THREE.AnimationAction;
+    walk: THREE.AnimationAction;
+    run: THREE.AnimationAction;
+  };
+  headBone?: THREE.Object3D;
+  skBones?: SkinnedRigBones;
+}
+
+interface SoldierTemplate {
+  scene: THREE.Group;
+  animations: THREE.AnimationClip[];
+}
+
+let cachedSoldierTemplate: SoldierTemplate | null = null;
+let soldierLoadPromise: Promise<void> | null = null;
+
+/**
+ * Preloads the real rigged Mixamo soldier GLB (/models/soldier.glb) once and smooths its
+ * geometry normals so every cloned ally & enemy renders silky-smooth with 2-bone arm IK!
+ */
+export function preloadSoldierTemplate(): Promise<void> {
+  if (cachedSoldierTemplate) return Promise.resolve();
+  if (soldierLoadPromise) return soldierLoadPromise;
+
+  soldierLoadPromise = new Promise<void>((resolve) => {
+    const loader = new GLTFLoader();
+    loader.load(
+      '/models/soldier.glb',
+      (gltf) => {
+        // Apply skinning-safe crease-angle normal smoothing once on the shared template!
+        gltf.scene.traverse((obj) => {
+          const mesh = obj as THREE.Mesh;
+          if (mesh.isMesh && mesh.geometry) {
+            const lower = (mesh.name || '').toLowerCase();
+            smoothGeometryNormals(mesh.geometry, lower.includes('visor') ? 72 : 62);
+          }
+        });
+        cachedSoldierTemplate = {
+          scene: gltf.scene,
+          animations: gltf.animations || [],
+        };
+        resolve();
+      },
+      undefined,
+      (err) => {
+        console.warn('[AgentModel] Could not load /models/soldier.glb; falling back to procedural rig.', err);
+        resolve();
+      }
+    );
+  });
+  return soldierLoadPromise;
+}
+
+// Zero-allocation scratch math objects for per-frame 2-bone analytical arm IK
+const _pUpper = new THREE.Vector3();
+const _pLower = new THREE.Vector3();
+const _pEnd = new THREE.Vector3();
+const _toTarget = new THREE.Vector3();
+const _dir = new THREE.Vector3();
+const _poleVec = new THREE.Vector3();
+const _perp = new THREE.Vector3();
+const _pElbow = new THREE.Vector3();
+const _curDir = new THREE.Vector3();
+const _desDir = new THREE.Vector3();
+const _qDelta = new THREE.Quaternion();
+const _qWorld = new THREE.Quaternion();
+const _qParentInv = new THREE.Quaternion();
+
+/**
+ * Coordinate-frame-agnostic 2-bone analytical Inverse Kinematics solver for Mixamo arms.
+ * Locks each soldier's right hand onto the AKM pistol grip and left hand under the wood handguard
+ * with natural downward-bent elbows while legs run/walk smoothly underneath!
+ */
+export function solveTwoBoneArmIK(
+  upperBone: THREE.Object3D,
+  lowerBone: THREE.Object3D,
+  endBone: THREE.Object3D,
+  targetWorld: THREE.Vector3,
+  poleWorld: THREE.Vector3,
+  weight = 1.0
+): void {
+  if (weight <= 0.001 || !upperBone.parent) return;
+
+  upperBone.getWorldPosition(_pUpper);
+  lowerBone.getWorldPosition(_pLower);
+  endBone.getWorldPosition(_pEnd);
+
+  const l1 = _pUpper.distanceTo(_pLower);
+  const l2 = _pLower.distanceTo(_pEnd);
+  if (l1 < 1e-4 || l2 < 1e-4) return;
+
+  _toTarget.subVectors(targetWorld, _pUpper);
+  const rawDist = _toTarget.length();
+  if (rawDist < 1e-4) return;
+
+  const minReach = Math.abs(l1 - l2) + 0.015;
+  const maxReach = (l1 + l2) * 0.992;
+  const d = THREE.MathUtils.clamp(rawDist, minReach, maxReach);
+  _dir.copy(_toTarget).divideScalar(rawDist);
+
+  // Law of cosines for exact elbow bend angle
+  const cosAlpha = THREE.MathUtils.clamp((l1 * l1 + d * d - l2 * l2) / (2 * l1 * d), -1, 1);
+  const sinAlpha = Math.sqrt(Math.max(0, 1 - cosAlpha * cosAlpha));
+
+  // Project elbow pole perpendicular to shoulder->hand axis
+  _poleVec.subVectors(poleWorld, _pUpper);
+  const proj = _poleVec.dot(_dir);
+  _perp.copy(_poleVec).addScaledVector(_dir, -proj);
+  if (_perp.lengthSq() < 1e-6) {
+    _perp.set(0, -1, 0);
+  } else {
+    _perp.normalize();
+  }
+
+  // Desired world elbow position
+  _pElbow
+    .copy(_pUpper)
+    .addScaledVector(_dir, l1 * cosAlpha)
+    .addScaledVector(_perp, l1 * sinAlpha);
+
+  // 1. Align upper arm bone toward desired elbow
+  _curDir.subVectors(_pLower, _pUpper).normalize();
+  _desDir.subVectors(_pElbow, _pUpper).normalize();
+  _qDelta.setFromUnitVectors(_curDir, _desDir);
+
+  upperBone.getWorldQuaternion(_qWorld);
+  upperBone.parent.getWorldQuaternion(_qParentInv).invert();
+  _qWorld.premultiply(_qDelta);
+  _qParentInv.multiply(_qWorld);
+  if (weight >= 0.999) {
+    upperBone.quaternion.copy(_qParentInv);
+  } else {
+    upperBone.quaternion.slerp(_qParentInv, weight);
+  }
+  upperBone.updateMatrixWorld(true);
+
+  // 2. Align forearm bone toward exact AKM grip target
+  lowerBone.getWorldPosition(_pLower);
+  endBone.getWorldPosition(_pEnd);
+  _curDir.subVectors(_pEnd, _pLower).normalize();
+  _desDir.subVectors(targetWorld, _pLower);
+  if (_desDir.lengthSq() < 1e-6) return;
+  _desDir.normalize();
+
+  _qDelta.setFromUnitVectors(_curDir, _desDir);
+  lowerBone.getWorldQuaternion(_qWorld);
+  upperBone.getWorldQuaternion(_qParentInv).invert();
+  _qWorld.premultiply(_qDelta);
+  _qParentInv.multiply(_qWorld);
+  if (weight >= 0.999) {
+    lowerBone.quaternion.copy(_qParentInv);
+  } else {
+    lowerBone.quaternion.slerp(_qParentInv, weight);
+  }
+  lowerBone.updateMatrixWorld(true);
+}
+
+const invisibleHitMat = new THREE.MeshBasicMaterial({
+  transparent: true,
+  opacity: 0,
+  depthWrite: false,
+  colorWrite: false,
+});
+
+let sharedAkmMatsReady = false;
+let sharedAkmSteelMat: THREE.MeshStandardMaterial;
+let sharedAkmWoodMat: THREE.MeshStandardMaterial;
+let sharedAkmMagMat: THREE.MeshStandardMaterial;
+let sharedAkmDarkMat: THREE.MeshStandardMaterial;
+
+function ensureBotAkmMaterials(): void {
+  if (sharedAkmMatsReady) return;
+  sharedAkmMatsReady = true;
+  const woodTex = buildSmoothAkWoodTexture();
+  const steelTex = buildBrushedGunmetalTexture();
+  sharedAkmSteelMat = new THREE.MeshStandardMaterial({
+    color: 0x9aa8c2,
+    map: steelTex,
+    roughness: 0.34,
+    metalness: 0.72,
+    envMapIntensity: 1.2,
+  });
+  sharedAkmWoodMat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    map: woodTex,
+    roughness: 0.48,
+    metalness: 0.04,
+  });
+  sharedAkmMagMat = new THREE.MeshStandardMaterial({
+    color: 0x5c3224,
+    roughness: 0.42,
+    metalness: 0.18,
+  });
+  sharedAkmDarkMat = new THREE.MeshStandardMaterial({
+    color: 0x222730,
+    roughness: 0.54,
+    metalness: 0.28,
+  });
+}
+
+function buildBotMuzzleFlash(muzzlePoint: THREE.Object3D): THREE.Group {
+  const muzzleFlash = new THREE.Group();
+  muzzleFlash.position.copy(muzzlePoint.position);
+  const mfOuterMat = new THREE.MeshBasicMaterial({
+    color: 0xff7824,
+    transparent: true,
+    opacity: 0.76,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const mfCoreMat = new THREE.MeshBasicMaterial({
+    color: 0xffe8b0,
+    transparent: true,
+    opacity: 0.85,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const mfJet = new THREE.Mesh(new THREE.ConeGeometry(0.055, 0.24, 6), mfOuterMat);
+  mfJet.rotation.x = Math.PI / 2;
+  mfJet.position.z = 0.12;
+  muzzleFlash.add(mfJet);
+  for (let i = 0; i < 4; i++) {
+    const fin = new THREE.Mesh(new THREE.ConeGeometry(0.028, 0.15, 5), mfOuterMat);
+    const a = (i * Math.PI) / 2 + Math.PI / 4;
+    fin.rotation.z = a;
+    fin.position.set(Math.cos(a) * 0.06, Math.sin(a) * 0.06, 0.02);
+    muzzleFlash.add(fin);
+  }
+  muzzleFlash.add(new THREE.Mesh(new THREE.OctahedronGeometry(0.048, 0), mfCoreMat));
+  muzzleFlash.visible = false;
+  return muzzleFlash;
+}
+
+/**
+ * Smooth sculpted third-person Cryzen AKM rifle with exact right-hand pistol grip
+ * and left-hand wooden handguard IK targets so soldiers shoulder & aim cleanly!
+ */
+function buildCompactBotAkm(): {
+  weaponPivot: THREE.Group;
+  muzzlePoint: THREE.Object3D;
+  muzzleFlash: THREE.Group;
+  rightGripTarget: THREE.Object3D;
+  leftGripTarget: THREE.Object3D;
+} {
+  ensureBotAkmMaterials();
+  const weaponPivot = new THREE.Group();
+  // Snugly tucked into right shoulder pocket so wooden stock rests against shoulder & both hands wrap cleanly!
+  weaponPivot.position.set(-0.145, 1.3, 0.17);
+  weaponPivot.rotation.set(0.02, 0.06, 0);
+
+  // Tapered smooth wooden AKM buttstock tucked right into right shoulder
+  const stockShape = new THREE.Shape();
+  stockShape.moveTo(0.0, 0.03);
+  stockShape.lineTo(-0.24, 0.01);
+  stockShape.lineTo(-0.24, -0.075);
+  stockShape.lineTo(0.0, -0.032);
+  stockShape.closePath();
+  const stockGeo = new THREE.ExtrudeGeometry(stockShape, {
+    depth: 0.038,
+    bevelEnabled: true,
+    bevelThickness: 0.006,
+    bevelSize: 0.005,
+    bevelSegments: 2,
+  });
+  stockGeo.translate(0, 0, -0.019);
+  stockGeo.rotateY(-Math.PI / 2); // -X becomes -Z rear!
+  const stock = new THREE.Mesh(stockGeo, sharedAkmWoodMat);
+  stock.position.set(0, 0.0, -0.02);
+  stock.castShadow = true;
+  weaponPivot.add(stock);
+
+  // Smooth chamfered steel receiver + rounded ribbed dust cover
+  const recGeo = new THREE.CylinderGeometry(0.034, 0.038, 0.31, 8);
+  recGeo.rotateX(Math.PI / 2);
+  recGeo.scale(0.85, 1.15, 1.0);
+  const receiver = new THREE.Mesh(recGeo, sharedAkmSteelMat);
+  receiver.position.set(0, 0.006, 0.13);
+  receiver.castShadow = true;
+  weaponPivot.add(receiver);
+
+  const dustCover = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.028, 0.28, 8), sharedAkmDarkMat);
+  dustCover.rotation.x = Math.PI / 2;
+  dustCover.position.set(0, 0.044, 0.13);
+  weaponPivot.add(dustCover);
+
+  // Rounded varnished wooden AKM handguard + upper gas tube cylinder
+  const lowerHg = new THREE.Mesh(new THREE.CapsuleGeometry(0.027, 0.2, 5, 10), sharedAkmWoodMat);
+  lowerHg.rotation.x = Math.PI / 2;
+  lowerHg.scale.set(0.92, 1, 1.08);
+  lowerHg.position.set(0, 0.004, 0.39);
+  lowerHg.castShadow = true;
+  weaponPivot.add(lowerHg);
+
+  const upperGasTube = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.015, 0.22, 10), sharedAkmWoodMat);
+  upperGasTube.rotation.x = Math.PI / 2;
+  upperGasTube.position.set(0, 0.032, 0.38);
+  weaponPivot.add(upperGasTube);
+
+  // Contoured pistol grip
+  const grip = new THREE.Mesh(new THREE.CapsuleGeometry(0.018, 0.085, 4, 8), sharedAkmDarkMat);
+  grip.position.set(0, -0.068, 0.03);
+  grip.rotation.x = -0.28;
+  weaponPivot.add(grip);
+
+  // Iconic curved 2-segment Bakelite 7.62 magazine
+  const magTop = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.115, 0.062), sharedAkmMagMat);
+  magTop.position.set(0, -0.078, 0.21);
+  magTop.rotation.x = 0.2;
+  magTop.castShadow = true;
+  weaponPivot.add(magTop);
+  const magBot = new THREE.Mesh(new THREE.BoxGeometry(0.031, 0.115, 0.06), sharedAkmMagMat);
+  magBot.position.set(0, -0.172, 0.246);
+  magBot.rotation.x = 0.42;
+  magBot.castShadow = true;
+  weaponPivot.add(magBot);
+
+  // Smooth cylindrical barrel, gas block, slant brake & hooded AKM front sight post
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.014, 0.34, 10), sharedAkmSteelMat);
+  barrel.rotation.x = Math.PI / 2;
+  barrel.position.set(0, 0.016, 0.65);
+  weaponPivot.add(barrel);
+
+  const gasBlock = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.06, 8), sharedAkmDarkMat);
+  gasBlock.rotation.x = Math.PI / 2;
+  gasBlock.position.set(0, 0.032, 0.54);
+  weaponPivot.add(gasBlock);
+
+  const frontSight = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.048, 0.018), sharedAkmDarkMat);
+  frontSight.position.set(0, 0.048, 0.74);
+  weaponPivot.add(frontSight);
+
+  // Exact IK grip anchors where the soldier's rigged hands lock cleanly onto the AKM!
+  const rightGripTarget = new THREE.Object3D();
+  rightGripTarget.position.set(-0.008, -0.056, 0.035);
+  weaponPivot.add(rightGripTarget);
+
+  const leftGripTarget = new THREE.Object3D();
+  leftGripTarget.position.set(0.016, -0.016, 0.345);
+  weaponPivot.add(leftGripTarget);
+
+  const muzzlePoint = new THREE.Object3D();
+  muzzlePoint.position.set(0, 0.016, 0.84);
+  weaponPivot.add(muzzlePoint);
+
+  const muzzleFlash = buildBotMuzzleFlash(muzzlePoint);
+  weaponPivot.add(muzzleFlash);
+
+  return { weaponPivot, muzzlePoint, muzzleFlash, rightGripTarget, leftGripTarget };
+}
+
+// Cached smooth vertex-contoured face geometry with crisp planar-spherical front UVs
+let sharedRefinedFaceGeo: THREE.BufferGeometry | null = null;
+const cachedFaceTextures = new Map<string, THREE.CanvasTexture>();
+
+function getRefinedFaceGeometry(): THREE.BufferGeometry {
+  if (sharedRefinedFaceGeo) return sharedRefinedFaceGeo;
+  const geo = new THREE.SphereGeometry(7.35, 32, 24);
+  geo.scale(0.84, 1.03, 0.78);
+
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const uv = geo.attributes.uv as THREE.BufferAttribute;
+
+  for (let i = 0; i < pos.count; i++) {
+    let x = pos.getX(i);
+    let y = pos.getY(i);
+    let z = pos.getZ(i);
+
+    if (z > 0.5) {
+      // Subtle continuous organic 3D facial sculpting: gentle nose ridge, brow contour & chin fullness
+      const noseRidge = Math.exp(-Math.pow(x / 1.35, 2) - Math.pow((y + 0.65) / 2.2, 2)) * 1.18;
+      const browArch = Math.exp(-Math.pow(x / 4.2, 2) - Math.pow((y - 2.3) / 1.15, 2)) * 0.35;
+      const chinLift = Math.exp(-Math.pow(x / 2.6, 2) - Math.pow((y + 4.8) / 1.6, 2)) * 0.38;
+      z += noseRidge + browArch + chinLift;
+      pos.setXYZ(i, x, y, z);
+    }
+
+    // Precision front-face UV mapping aligning painted almond eyes, brows, nose & mouth seamlessly!
+    const u = THREE.MathUtils.clamp(0.5 + x / 11.4, 0.02, 0.98);
+    const v = THREE.MathUtils.clamp(0.52 + y / 14.2, 0.02, 0.98);
+    uv.setXY(i, u, v);
+  }
+  pos.needsUpdate = true;
+  uv.needsUpdate = true;
+  geo.computeVertexNormals();
+  sharedRefinedFaceGeo = geo;
+  return geo;
+}
+
+function buildExpressiveOperatorFace(team: Team, variant: number): THREE.Group {
+  const face = new THREE.Group();
+  const isAlly = team === 'ally';
+  const vKey = `${team}:${Math.abs(variant) % 4}`;
+  let faceTex = cachedFaceTextures.get(vKey);
+  if (!faceTex) {
+    faceTex = buildRefinedFaceTexture(team, variant);
+    cachedFaceTextures.set(vKey, faceTex);
+  }
+
+  const matFace = new THREE.MeshStandardMaterial({
+    map: faceTex,
+    emissiveMap: faceTex,
+    emissive: new THREE.Color(0xffffff),
+    emissiveIntensity: 0.16,
+    roughness: 0.62,
+    metalness: 0.02,
+    envMapIntensity: 0.45,
+  });
+
+  // Single silky-smooth continuous sculpted human face (zero bumpy primitive spheres!)
+  const faceMesh = new THREE.Mesh(getRefinedFaceGeometry(), matFace);
+  faceMesh.position.set(0, -0.35, 0.35);
+  face.add(faceMesh);
+
+  // Subtle low-profile dark helmet chinstrap framing the lower jaw
+  const matGearDark = new THREE.MeshStandardMaterial({
+    color: 0x222832,
+    roughness: 0.56,
+    metalness: 0.32,
+  });
+  const chinStrap = new THREE.Mesh(new THREE.TorusGeometry(5.55, 0.32, 6, 18, Math.PI * 0.72), matGearDark);
+  chinStrap.rotation.x = Math.PI * 0.34;
+  chinStrap.rotation.z = -Math.PI * 0.86;
+  chinStrap.position.set(0, -4.65, 1.5);
+  face.add(chinStrap);
+
+  // Sleek slim tactical helmet brow accent strip (keeps forehead & eyebrows 100% unobstructed!)
+  const matIffGlow = new THREE.MeshStandardMaterial({
+    color: isAlly ? 0x62f7ff : 0xff4b34,
+    emissive: new THREE.Color(isAlly ? 0x20e2ff : 0xff2816),
+    emissiveIntensity: 1.4,
+    roughness: 0.25,
+    metalness: 0.2,
+  });
+  const browTrim = new THREE.Mesh(new THREE.BoxGeometry(9.6, 1.15, 2.0), matGearDark);
+  browTrim.position.set(0, 5.8, 4.4);
+  browTrim.rotation.x = -0.2;
+  face.add(browTrim);
+  const iffPip = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.52, 0.6), matIffGlow);
+  iffPip.position.set(0, 5.85, 5.42);
+  iffPip.rotation.x = -0.2;
+  face.add(iffPip);
+
+  return face;
+}
+
+function buildSkinnedSoldierRig(agentId: string, team: Team, style: AgentVisualStyle): AgentRig {
+  const tpl = cachedSoldierTemplate!;
+  const root = new THREE.Group();
+  const modelPivot = new THREE.Group();
+  root.add(modelPivot);
+
+  const cloned = SkeletonUtils.clone(tpl.scene) as THREE.Group;
+  // Mixamo Soldier.glb faces -Z by default; rotate 180° around Y so he faces +Z matching our AI convention!
+  cloned.rotation.y = Math.PI;
+  cloned.scale.setScalar(0.96);
+  modelPivot.add(cloned);
+
+  const hitMeshes: THREE.Mesh[] = [];
+  const flashMaterials: THREE.MeshStandardMaterial[] = [];
+  const isAlly = team === 'ally';
+
+  // Clean bright Cryzen.io-inspired Team Blue (Ally) vs Team Red (Enemy) smooth shading!
+  const bodyTint = isAlly
+    ? 0x5ca8ff
+    : style === 'sentinel'
+    ? 0xe83244
+    : style === 'striker'
+    ? 0xff4e42
+    : 0xff3b4c;
+  const bodyEmissive = isAlly ? 0x10306b : 0x540b14;
+
+  cloned.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const lowerName = (mesh.name || '').toLowerCase();
+    // Hide the blank opaque vanguard visor so our sculpted 3D Cryzen human face shows clearly!
+    if (lowerName.includes('visor')) {
+      mesh.visible = false;
+      return;
+    }
+    mesh.frustumCulled = false;
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    const clonedMats = mats.map((m) => {
+      const clonedMat = m.clone() as THREE.MeshStandardMaterial;
+      if (clonedMat.isMeshStandardMaterial) {
+        clonedMat.flatShading = false;
+        clonedMat.color.setHex(bodyTint);
+        clonedMat.emissive.setHex(bodyEmissive);
+        clonedMat.emissiveIntensity = 0.22;
+        clonedMat.roughness = 0.52;
+        clonedMat.metalness = 0.16;
+        clonedMat.envMapIntensity = 1.0;
+        if (clonedMat.normalScale) {
+          clonedMat.normalScale.set(0.36, 0.36);
+        }
+        flashMaterials.push(clonedMat);
+        clonedMat.needsUpdate = true;
+      }
+      return clonedMat;
+    });
+    mesh.material = Array.isArray(mesh.material) ? clonedMats : clonedMats[0];
+  });
+
+  // Bone discovery immune to GLTFLoader colon/dot stripping (e.g. "mixamorig:Head" -> "mixamorigHead")
+  const findBone = (pattern: RegExp): THREE.Object3D | null => {
+    let found: THREE.Object3D | null = null;
+    cloned.traverse((o) => {
+      if (!found && o.name && pattern.test(o.name.replace(/[:._]/g, ''))) {
+        found = o;
+      }
+    });
+    return found;
+  };
+
+  const skBones: SkinnedRigBones = {
+    hips: findBone(/^mixamorigHips$/i) ?? undefined,
+    spine: findBone(/^mixamorigSpine$/i) ?? undefined,
+    spine1: findBone(/^mixamorigSpine1$/i) ?? undefined,
+    spine2: findBone(/^mixamorigSpine2$/i) ?? undefined,
+    head: findBone(/^mixamorigHead$/i) ?? undefined,
+    rightArm: findBone(/^mixamorigRightArm$/i) ?? undefined,
+    rightForeArm: findBone(/^mixamorigRightForeArm$/i) ?? undefined,
+    rightHand: findBone(/^mixamorigRightHand$/i) ?? undefined,
+    leftArm: findBone(/^mixamorigLeftArm$/i) ?? undefined,
+    leftForeArm: findBone(/^mixamorigLeftForeArm$/i) ?? undefined,
+    leftHand: findBone(/^mixamorigLeftHand$/i) ?? undefined,
+    leftUpLeg: findBone(/^mixamorigLeftUpLeg$/i) ?? undefined,
+    rightUpLeg: findBone(/^mixamorigRightUpLeg$/i) ?? undefined,
+    leftLeg: findBone(/^mixamorigLeftLeg$/i) ?? undefined,
+    rightLeg: findBone(/^mixamorigRightLeg$/i) ?? undefined,
+  };
+
+  const headBone = skBones.head;
+  const spineBone = skBones.spine1 ?? skBones.spine;
+  const leftLegBone = skBones.leftUpLeg;
+  const rightLegBone = skBones.rightUpLeg;
+
+  const registerHit = (mesh: THREE.Mesh, zone: 'head' | 'body' | 'leg') => {
+    mesh.userData.agentId = agentId;
+    mesh.userData.hitZone = zone;
+    mesh.userData.team = team;
+    hitMeshes.push(mesh);
+    return mesh;
+  };
+
+  // Attach invisible bone-tracked hitboxes & sculpted 3D expressive human face in Mixamo cm space!
+  if (headBone) {
+    const headHit = registerHit(new THREE.Mesh(new THREE.SphereGeometry(18, 8, 6), invisibleHitMat), 'head');
+    headHit.position.set(0, 11, 2);
+    headBone.add(headHit);
+
+    // Compute exact face-opening anchor in bind pose BEFORE AnimationMixer moves the skeleton!
+    root.updateMatrixWorld(true);
+    let faceVariant = 0;
+    for (let i = 0; i < agentId.length; i++) faceVariant += agentId.charCodeAt(i) * (i + 1);
+    const faceGroup = buildExpressiveOperatorFace(team, faceVariant);
+    const charNode = cloned.children[0] ?? cloned;
+    const bindFaceCenter = new THREE.Vector3(0, 4.6, 167.2);
+    charNode.localToWorld(bindFaceCenter);
+    headBone.worldToLocal(bindFaceCenter);
+    faceGroup.position.copy(bindFaceCenter);
+    headBone.add(faceGroup);
+  } else {
+    const headHit = registerHit(new THREE.Mesh(new THREE.SphereGeometry(0.18, 8, 6), invisibleHitMat), 'head');
+    headHit.position.set(0, 1.63, 0);
+    modelPivot.add(headHit);
+  }
+
+  if (spineBone) {
+    const bodyHit = registerHit(new THREE.Mesh(new THREE.BoxGeometry(44, 62, 32), invisibleHitMat), 'body');
+    bodyHit.position.set(0, 18, 0);
+    spineBone.add(bodyHit);
+  } else {
+    const bodyHit = registerHit(new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.62, 0.32), invisibleHitMat), 'body');
+    bodyHit.position.set(0, 1.15, 0);
+    modelPivot.add(bodyHit);
+  }
+
+  if (leftLegBone && rightLegBone) {
+    const lHit = registerHit(new THREE.Mesh(new THREE.CylinderGeometry(14, 11, 56, 6), invisibleHitMat), 'leg');
+    lHit.position.set(0, 26, 0);
+    leftLegBone.add(lHit);
+    const rHit = registerHit(new THREE.Mesh(new THREE.CylinderGeometry(14, 11, 56, 6), invisibleHitMat), 'leg');
+    rHit.position.set(0, 26, 0);
+    rightLegBone.add(rHit);
+  } else {
+    const legHit = registerHit(new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.8, 0.28), invisibleHitMat), 'leg');
+    legHit.position.set(0, 0.42, 0);
+    modelPivot.add(legHit);
+  }
+
+  const blindHalo = new THREE.Mesh(
+    new THREE.TorusGeometry(0.24, 0.022, 8, 18),
+    new THREE.MeshBasicMaterial({ color: 0xffe46b, transparent: true, opacity: 0.92 })
+  );
+  blindHalo.rotation.x = Math.PI / 2;
+  blindHalo.position.set(0, 1.94, 0);
+  blindHalo.visible = false;
+  modelPivot.add(blindHalo);
+
+  // Smooth sculpted Cryzen AKM shouldered cleanly with exact hand IK anchors!
+  const { weaponPivot, muzzlePoint, muzzleFlash, rightGripTarget, leftGripTarget } = buildCompactBotAkm();
+  modelPivot.add(weaponPivot);
+
+  // Setup continuous 3-way blended skeletal AnimationMixer (Idle <-> Walk <-> Run with zero snaps!)
+  const mixer = new THREE.AnimationMixer(cloned);
+  const findClip = (name: string) =>
+    tpl.animations.find((c) => c.name.toLowerCase() === name) ?? tpl.animations[0];
+
+  const idleAction = mixer.clipAction(findClip('idle'));
+  const walkAction = mixer.clipAction(findClip('walk'));
+  const runAction = mixer.clipAction(findClip('run'));
+  idleAction.enabled = true;
+  walkAction.enabled = true;
+  runAction.enabled = true;
+  idleAction.setEffectiveWeight(1).play();
+  walkAction.setEffectiveWeight(0).play();
+  runAction.setEffectiveWeight(0).play();
+  mixer.update(Math.random() * 1.2); // Slight phase stagger so squadmates don't breathe in unison!
+
+  const dummy = () => new THREE.Group();
+  return {
+    isSkinned: true,
+    root,
+    modelPivot,
+    hips: dummy(),
+    torso: dummy(),
+    headGroup: dummy(),
+    leftLeg: dummy(),
+    rightLeg: dummy(),
+    leftKnee: dummy(),
+    rightKnee: dummy(),
+    leftFoot: dummy(),
+    rightFoot: dummy(),
+    weaponPivot,
+    muzzlePoint,
+    muzzleFlash,
+    rightGripTarget,
+    leftGripTarget,
+    blindHalo,
+    hitMeshes,
+    flashMaterials,
+    mixer,
+    actions: { idle: idleAction, walk: walkAction, run: runAction },
+    headBone,
+    skBones,
+  };
 }
 
 // Shared beveled SAPI armor plate geometry (created once, zero per-bot cost)
@@ -60,6 +743,9 @@ export function buildAgentRig(
   style: AgentVisualStyle,
   textures?: TextureLibrary
 ): AgentRig {
+  if (cachedSoldierTemplate) {
+    return buildSkinnedSoldierRig(agentId, team, style);
+  }
   const root = new THREE.Group();
   const hips = new THREE.Group();
   hips.position.y = 0.94;
@@ -655,7 +1341,9 @@ export function buildAgentRig(
   weaponPivot.add(muzzleFlash);
 
   return {
+    isSkinned: false,
     root,
+    modelPivot: root,
     hips,
     torso,
     headGroup,

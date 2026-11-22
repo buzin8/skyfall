@@ -3,6 +3,8 @@ import * as THREE from 'three';
 export type GameMode = 'tactical' | 'clutch' | 'skirmish';
 export type Difficulty = 'casual' | 'tactical' | 'radiant';
 export type Team = 'ally' | 'enemy';
+export type MapId = 'factory' | 'foundry';
+export type WeaponId = 'vandal' | 'scarl';
 
 export interface AABB {
   minX: number;
@@ -32,7 +34,7 @@ export interface Waypoint {
 }
 
 export interface WeaponDef {
-  id: 'vandal';
+  id: WeaponId;
   name: string;
   fireMode: 'AUTO';
   damageBody: number;
@@ -56,6 +58,7 @@ export interface WeaponDef {
 }
 
 export interface GameSettings {
+  map: MapId;
   mode: GameMode;
   difficulty: Difficulty;
   sensitivity: number;

@@ -4,16 +4,17 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
-import { Difficulty, GameMode, GameSettings } from './types';
+import { Difficulty, GameMode, GameSettings, MapId } from './types';
 import { SoundEngine } from './audio/SoundEngine';
 import { createTextureLibrary, TextureLibrary } from './textures/ProceduralTextures';
 import { BuiltLevel, LevelBuilder } from './world/LevelBuilder';
 import { PlayerController } from './player/PlayerController';
 import { WeaponSystem } from './weapons/WeaponSystem';
+import { preloadSoldierTemplate } from './entities/AgentModel';
 import { AgentFireEvent, TacticalAgent, hasClearSight } from './entities/AgentAI';
 import { AbilitySystem } from './abilities/AbilitySystem';
 import { Minimap } from './ui/Minimap';
-import { HUD } from './ui/HUD';
+import { DamageHistoryEntry, HUD, NameplateTarget } from './ui/HUD';
 
 const ROUNDS_TO_WIN = 5;
 const ROUND_DURATION = 90;
@@ -68,6 +69,62 @@ function buildIndustrialEnvironment(renderer: THREE.WebGLRenderer): THREE.Textur
   return rt.texture;
 }
 
+/**
+ * Generates a vibrant golden-hour azure + electric-cyan + warm amber sun PMREM reflection map
+ * for Cryzen Factory so wet meltwater puddles, shipping containers, and guns gleam like Foundry 07!
+ */
+function buildDaylightEnvironment(renderer: THREE.WebGLRenderer): THREE.Texture {
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  pmrem.compileEquirectangularShader();
+
+  const envScene = new THREE.Scene();
+  envScene.background = new THREE.Color(0x2866b8);
+
+  const skyDome = new THREE.Mesh(
+    new THREE.SphereGeometry(20, 16, 12),
+    new THREE.MeshBasicMaterial({ color: 0x3b8ce0, side: THREE.BackSide })
+  );
+  envScene.add(skyDome);
+
+  const groundPlane = new THREE.Mesh(
+    new THREE.PlaneGeometry(36, 36),
+    new THREE.MeshBasicMaterial({ color: 0x4b5c72 })
+  );
+  groundPlane.rotation.x = -Math.PI / 2;
+  groundPlane.position.y = -4;
+  envScene.add(groundPlane);
+
+  // Radiant golden-amber sunset reflection panels (makes gunmetal & wet puddles shimmer!)
+  const sunDisc = new THREE.Mesh(
+    new THREE.SphereGeometry(3.6, 12, 10),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(4.2, 2.7, 1.15) })
+  );
+  sunDisc.position.set(10, 11, 9);
+  envScene.add(sunDisc);
+
+  // Crisp electric-cyan sky bounce strip opposite the golden sun
+  const cyanBounce = new THREE.Mesh(
+    new THREE.PlaneGeometry(14, 6),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(0.55, 2.8, 3.8) })
+  );
+  cyanBounce.position.set(-10, 5, -11);
+  cyanBounce.lookAt(0, 0, 0);
+  envScene.add(cyanBounce);
+
+  // Subtle crimson-amber industrial side accent bounce
+  const warmAccent = new THREE.Mesh(
+    new THREE.PlaneGeometry(10, 4.5),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(3.4, 1.2, 0.55) })
+  );
+  warmAccent.position.set(-12, 2, 4);
+  warmAccent.lookAt(0, 0, 0);
+  envScene.add(warmAccent);
+
+  const rt = pmrem.fromScene(envScene, 0.035);
+  pmrem.dispose();
+  return rt.texture;
+}
+
 class SunfireGame {
   private container = document.getElementById('game-container')!;
   private renderer: THREE.WebGLRenderer;
@@ -75,6 +132,8 @@ class SunfireGame {
   private bloomPass: UnrealBloomPass | null = null;
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
+  private envFactory: THREE.Texture;
+  private envFoundry: THREE.Texture;
 
   private sound = new SoundEngine();
   private textures: TextureLibrary;
@@ -87,13 +146,16 @@ class SunfireGame {
 
   private agents: TacticalAgent[] = [];
   private raycaster = new THREE.Raycaster();
+  private roundDamageHistory = new Map<string, DamageHistoryEntry>();
+  private tmpHeadPos = new THREE.Vector3();
 
   private settings: GameSettings = {
+    map: 'factory',
     mode: 'tactical',
     difficulty: 'tactical',
     sensitivity: 1.0,
     volume: 0.75,
-    crosshairColor: '#00ffbf',
+    crosshairColor: '#ffffff',
   };
 
   private matchStarted = false;
@@ -132,30 +194,33 @@ class SunfireGame {
   private btnRestart = document.getElementById('btn-restart')!;
 
   constructor() {
-    // 1. High-efficiency 60 FPS WebGL renderer
+    // 1. Razor-sharp full HiDPI hardware MSAA WebGL renderer (up to 2x native DPR!)
+    const sharpDpr = Math.min(window.devicePixelRatio, 2.0);
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
+    this.renderer.setPixelRatio(sharpDpr);
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.24;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.container.appendChild(this.renderer.domElement);
 
-    // 2. Scene, Camera & PMREM Industrial Environment Reflections
+    // 2. Scene, Camera & Dual PMREM Environments (Sunlit Cryzen Factory + Industrial Foundry 07)
     this.scene = new THREE.Scene();
-    this.scene.environment = buildIndustrialEnvironment(this.renderer);
-    this.camera = new THREE.PerspectiveCamera(74, window.innerWidth / window.innerHeight, 0.08, 180);
+    this.envFactory = buildDaylightEnvironment(this.renderer);
+    this.envFoundry = buildIndustrialEnvironment(this.renderer);
+    this.camera = new THREE.PerspectiveCamera(74, window.innerWidth / window.innerHeight, 0.08, 220);
     this.scene.add(this.camera);
 
-    // 3. Optional half-res Bloom Post-Processing (off by default for locked 60 FPS; toggleable in menu)
+    // 3. Half-res Selective HDR Bloom Post-Processing
     this.setupPostProcessing();
 
-    // 4. Build Dark Gritty Industrial Foundry Arena
+    // 4. Build Active Arena Map (FACTORY CRYZEN default)
     this.textures = createTextureLibrary();
+    this.applyMapAtmosphereConfig(this.settings.map);
     const builder = new LevelBuilder(this.textures);
-    this.level = builder.build(this.scene);
+    this.level = builder.build(this.scene, this.settings.map);
 
     // 5. Core gameplay subsystems
     this.player = new PlayerController(this.sound);
@@ -189,8 +254,17 @@ class SunfireGame {
     try {
       const w = window.innerWidth;
       const h = window.innerHeight;
-      const composer = new EffectComposer(this.renderer);
-      composer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
+      const dpr = Math.min(window.devicePixelRatio, 2.0);
+      const maxSamples = this.renderer.capabilities.isWebGL2
+        ? Math.min(8, this.renderer.capabilities.maxSamples || 4)
+        : 0;
+      // Full-DPR multi-sampled MSAA render target so guns & characters stay razor-sharp even with Bloom!
+      const rt = new THREE.WebGLRenderTarget(Math.floor(w * dpr), Math.floor(h * dpr), {
+        type: THREE.HalfFloatType,
+        samples: maxSamples,
+      });
+      const composer = new EffectComposer(this.renderer, rt);
+      composer.setPixelRatio(dpr);
       composer.setSize(w, h);
 
       const renderPass = new RenderPass(this.scene, this.camera);
@@ -215,6 +289,50 @@ class SunfireGame {
     }
   }
 
+  private applyMapAtmosphereConfig(mapId: MapId): void {
+    const isFactory = mapId === 'factory';
+    this.scene.environment = isFactory ? this.envFactory : this.envFoundry;
+    this.renderer.toneMappingExposure = isFactory ? 1.15 : 1.24;
+    if (this.bloomPass) {
+      // Selective HDR Bloom on BOTH maps: higher threshold on Vikendi keeps crisp sunlit snow sharp while beacons, windows & fire glow!
+      this.bloomPass.threshold = isFactory ? 1.18 : 0.8;
+      this.bloomPass.strength = isFactory ? 0.35 : 0.42;
+      this.bloomPass.radius = isFactory ? 0.44 : 0.48;
+    }
+    const brandTag = document.getElementById('brand-tag');
+    if (brandTag) {
+      brandTag.textContent = isFactory
+        ? 'VIKENDI // SNOW COMPOUND'
+        : 'WAREHOUSE // NIGHT SHIFT';
+    }
+    if (!this.matchStarted) {
+      this.btnDeployLabel.textContent = isFactory ? 'DEPLOY TO VIKENDI' : 'DEPLOY TO WAREHOUSE';
+    }
+  }
+
+  private switchMap(mapId: MapId): void {
+    if (this.settings.map === mapId) return;
+    this.settings.map = mapId;
+    this.scene.remove(this.level.group);
+    this.weapons.clearRoundFx();
+    this.abilities.resetCharges();
+
+    this.applyMapAtmosphereConfig(mapId);
+    const builder = new LevelBuilder(this.textures);
+    this.level = builder.build(this.scene, mapId);
+
+    const mmCanvas = document.getElementById('minimap-canvas') as HTMLCanvasElement;
+    this.minimap = new Minimap(mmCanvas, this.level.minimapRects, this.level.mapBounds);
+
+    if (this.matchStarted) {
+      this.matchStarted = false;
+      this.roundActive = false;
+      this.btnDeployLabel.textContent = mapId === 'factory' ? 'DEPLOY TO VIKENDI' : 'DEPLOY TO WAREHOUSE';
+      this.btnRestart.classList.add('hidden');
+    }
+    this.setupShowcaseFrame();
+  }
+
   private setupShowcaseFrame(): void {
     this.player.reset(this.level.playerSpawn.pos, this.level.playerSpawn.yaw);
     this.weapons.resetAll();
@@ -229,6 +347,14 @@ class SunfireGame {
   }
 
   private bindMenuUI(): void {
+    document.querySelectorAll<HTMLButtonElement>('#map-pills .pill').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('#map-pills .pill').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        this.switchMap(btn.dataset.map as MapId);
+      });
+    });
+
     document.querySelectorAll<HTMLButtonElement>('#mode-list .mode-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         document.querySelectorAll('#mode-list .mode-btn').forEach((b) => b.classList.remove('active'));
@@ -236,7 +362,8 @@ class SunfireGame {
         this.settings.mode = btn.dataset.mode as GameMode;
         if (this.matchStarted) {
           this.matchStarted = false;
-          this.btnDeployLabel.textContent = 'DEPLOY TO SECTOR 07';
+          this.btnDeployLabel.textContent =
+            this.settings.map === 'factory' ? 'DEPLOY TO VIKENDI' : 'DEPLOY TO WAREHOUSE';
           this.btnRestart.classList.add('hidden');
         }
         this.spawnAgentsForRound(true);
@@ -256,7 +383,7 @@ class SunfireGame {
         document.querySelectorAll('#graphics-pills .pill').forEach((b) => b.classList.remove('active'));
         btn.classList.add('active');
         this.bloomEnabled = btn.dataset.gfx === 'bloom';
-        const dprCap = this.bloomEnabled ? 1.5 : 1.25;
+        const dprCap = this.bloomEnabled ? 2.0 : 1.5;
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, dprCap));
         this.composer?.setPixelRatio(Math.min(window.devicePixelRatio, dprCap));
       });
@@ -317,7 +444,8 @@ class SunfireGame {
       this.roundActive = false;
       this.hud.setVisible(false);
       this.menuOverlay.classList.remove('hidden');
-      this.btnDeployLabel.textContent = 'DEPLOY TO SECTOR 07';
+      this.btnDeployLabel.textContent =
+        this.settings.map === 'factory' ? 'DEPLOY TO VIKENDI' : 'DEPLOY TO WAREHOUSE';
       this.btnRestart.classList.add('hidden');
     });
   }
@@ -372,7 +500,9 @@ class SunfireGame {
 
       if (!this.player.alive) return;
 
-      if (e.code === 'KeyR') this.weapons.startReload();
+      if (e.code === 'Digit1') this.weapons.selectSlot(0);
+      else if (e.code === 'Digit2') this.weapons.selectSlot(1);
+      else if (e.code === 'KeyR') this.weapons.startReload();
       else if (e.code === 'KeyQ') {
         const origin = this.player.getEyePosition();
         const dir = new THREE.Vector3();
@@ -384,12 +514,22 @@ class SunfireGame {
         this.camera.getWorldDirection(dir);
         this.abilities.throwSmoke(origin, dir);
       } else if (e.code === 'KeyC') {
-        this.abilities.useStim(() => this.player.activateStim());
+        const origin = this.player.getEyePosition();
+        const dir = new THREE.Vector3();
+        this.camera.getWorldDirection(dir);
+        this.abilities.throwFrag(origin, dir);
       }
     });
 
     window.addEventListener('keyup', (e) => {
       this.player.onKeyUp(e.code);
+    });
+
+    window.addEventListener('wheel', (e) => {
+      if (this.paused || !this.player.alive) return;
+      if (Math.abs(e.deltaY) > 2) {
+        this.weapons.cycleSlot(e.deltaY);
+      }
     });
   }
 
@@ -410,21 +550,48 @@ class SunfireGame {
     this.resumeGame();
   }
 
+  private recordPlayerDamage(attacker: string, amount: number, weapon: string, killed: boolean): void {
+    const prev = this.roundDamageHistory.get(attacker);
+    if (prev) {
+      prev.totalDamage += amount;
+      prev.hits += 1;
+      if (killed) prev.isKiller = true;
+    } else {
+      this.roundDamageHistory.set(attacker, {
+        attacker,
+        totalDamage: amount,
+        hits: 1,
+        weapon,
+        isKiller: killed,
+      });
+    }
+    if (killed) {
+      const entries = [...this.roundDamageHistory.values()].sort((a, b) =>
+        a.isKiller ? -1 : b.isKiller ? 1 : b.totalDamage - a.totalDamage
+      );
+      this.hud.showDamageHistory(entries);
+    }
+  }
+
   private startRound(): void {
     this.roundActive = true;
     this.roundEndDelay = 0;
     this.roundTimer = this.settings.mode === 'skirmish' ? 180 : ROUND_DURATION;
     this.roundKillStreak = 0;
+    this.roundDamageHistory.clear();
+    this.hud.hideDamageHistory();
 
     this.player.reset(this.level.playerSpawn.pos, this.level.playerSpawn.yaw);
     this.weapons.resetAll();
+    this.weapons.clearRoundFx();
     this.abilities.resetCharges();
     this.spawnAgentsForRound(false);
 
+    const mapTitle = this.settings.map === 'factory' ? 'VIKENDI' : 'WAREHOUSE';
     if (this.settings.mode === 'skirmish') {
-      this.hud.showBanner('ENDLESS SKIRMISH', 'HOLD FOUNDRY BAY 07', 2.2);
+      this.hud.showBanner('ENDLESS SKIRMISH', `HOLD ${mapTitle}`, 2.2);
     } else {
-      const sub = this.settings.mode === 'tactical' ? 'FOUNDRY BREACH // 3v5' : 'SOLO CLUTCH // 1v5';
+      const sub = this.settings.mode === 'tactical' ? `${mapTitle} // 3v5` : `${mapTitle} // 1v5`;
       this.hud.showBanner(sub, `ROUND ${this.roundNumber}`, 2.1);
     }
   }
@@ -447,7 +614,7 @@ class SunfireGame {
           this.scene,
           this.textures
         );
-        ally.respawn(sp.pos, sp.yaw, showcaseOnly ? 99 : idx === 0 ? 3.2 : 1.6);
+        ally.respawn(sp.pos, sp.yaw, showcaseOnly ? 99 : 1.15);
         this.agents.push(ally);
       });
     }
@@ -492,6 +659,121 @@ class SunfireGame {
     }
   }
 
+  /**
+   * Exact analytic 3D ray-AABB slab test against every solid level collider (guarantees ZERO bullet wall penetration!).
+   */
+  private raycastSolidColliders(
+    origin: THREE.Vector3,
+    dir: THREE.Vector3,
+    maxDist: number
+  ): { dist: number; point: THREE.Vector3; normal: THREE.Vector3 } | null {
+    let bestT = maxDist;
+    let bestNormal: THREE.Vector3 | null = null;
+
+    for (const b of this.level.colliders) {
+      let tmin = 0.005;
+      let tmax = bestT;
+      let hitAxis = -1;
+      let hitSign = 0;
+
+      // X slab
+      if (Math.abs(dir.x) < 1e-7) {
+        if (origin.x < b.minX || origin.x > b.maxX) continue;
+      } else {
+        const inv = 1 / dir.x;
+        let t1 = (b.minX - origin.x) * inv;
+        let t2 = (b.maxX - origin.x) * inv;
+        let s = -1;
+        if (t1 > t2) {
+          [t1, t2] = [t2, t1];
+          s = 1;
+        }
+        if (t1 > tmin) {
+          tmin = t1;
+          hitAxis = 0;
+          hitSign = s;
+        }
+        tmax = Math.min(tmax, t2);
+        if (tmin > tmax) continue;
+      }
+
+      // Y slab
+      if (Math.abs(dir.y) < 1e-7) {
+        if (origin.y < b.minY || origin.y > b.maxY) continue;
+      } else {
+        const inv = 1 / dir.y;
+        let t1 = (b.minY - origin.y) * inv;
+        let t2 = (b.maxY - origin.y) * inv;
+        let s = -1;
+        if (t1 > t2) {
+          [t1, t2] = [t2, t1];
+          s = 1;
+        }
+        if (t1 > tmin) {
+          tmin = t1;
+          hitAxis = 1;
+          hitSign = s;
+        }
+        tmax = Math.min(tmax, t2);
+        if (tmin > tmax) continue;
+      }
+
+      // Z slab
+      if (Math.abs(dir.z) < 1e-7) {
+        if (origin.z < b.minZ || origin.z > b.maxZ) continue;
+      } else {
+        const inv = 1 / dir.z;
+        let t1 = (b.minZ - origin.z) * inv;
+        let t2 = (b.maxZ - origin.z) * inv;
+        let s = -1;
+        if (t1 > t2) {
+          [t1, t2] = [t2, t1];
+          s = 1;
+        }
+        if (t1 > tmin) {
+          tmin = t1;
+          hitAxis = 2;
+          hitSign = s;
+        }
+        tmax = Math.min(tmax, t2);
+        if (tmin > tmax) continue;
+      }
+
+      if (tmin >= 0.005 && tmin < bestT) {
+        bestT = tmin;
+        bestNormal =
+          hitAxis === 0
+            ? new THREE.Vector3(hitSign, 0, 0)
+            : hitAxis === 1
+            ? new THREE.Vector3(0, hitSign, 0)
+            : hitAxis === 2
+            ? new THREE.Vector3(0, 0, hitSign)
+            : dir.clone().negate();
+      }
+    }
+
+    if (!bestNormal) return null;
+    return {
+      dist: bestT,
+      point: origin.clone().addScaledVector(dir, bestT),
+      normal: bestNormal,
+    };
+  }
+
+  private projectWallBloodSplatter(hitPoint: THREE.Vector3, shotDir: THREE.Vector3, scale: number): void {
+    this.raycaster.set(hitPoint, shotDir);
+    this.raycaster.near = 0.08;
+    this.raycaster.far = 3.6;
+    const hits = this.raycaster.intersectObjects(this.level.raycastMeshes, false);
+    if (hits.length > 0 && hits[0].face) {
+      const n = hits[0].face.normal.clone().transformDirection(hits[0].object.matrixWorld).normalize();
+      // Stamp onto walls/pillars/crates (skip floor here since floor pools & droplet splatters handle y=0)
+      if (Math.abs(n.y) < 0.72) {
+        this.weapons.spawnWallBloodSplatter(hits[0].point, n, scale);
+      }
+    }
+  }
+
   private handlePlayerShot(): void {
     const shot = this.weapons.tryFire(
       this.fireHeld,
@@ -504,59 +786,76 @@ class SunfireGame {
     this.fireJustPressed = false;
     if (!shot) return;
 
-    const targets: THREE.Object3D[] = [...this.level.raycastMeshes];
-    for (const agent of this.agents) {
-      if (agent.alive && agent.team === 'enemy') {
-        targets.push(...agent.rig.hitMeshes);
-      }
-    }
-
+    // 1. Strict wall-first raycast (BOTH level meshes AND analytic AABB colliders) -> ZERO bullet wall penetration!
     this.raycaster.set(shot.origin, shot.direction);
-    this.raycaster.near = 0.05;
+    this.raycaster.near = 0.01;
     this.raycaster.far = shot.weapon.range;
 
-    const hits = this.raycaster.intersectObjects(targets, false);
+    const wallMeshHits = this.raycaster.intersectObjects(this.level.raycastMeshes, false);
+    const colliderHit = this.raycastSolidColliders(shot.origin, shot.direction, shot.weapon.range);
+
+    let hardWallDist = shot.weapon.range;
+    let wallPoint: THREE.Vector3 | null = null;
+    let wallNormal: THREE.Vector3 | null = null;
+
+    if (wallMeshHits.length > 0) {
+      hardWallDist = wallMeshHits[0].distance;
+      wallPoint = wallMeshHits[0].point.clone();
+      wallNormal = wallMeshHits[0].face
+        ? wallMeshHits[0].face.normal.clone().transformDirection(wallMeshHits[0].object.matrixWorld).normalize()
+        : shot.direction.clone().negate();
+    }
+    if (colliderHit && colliderHit.dist < hardWallDist) {
+      hardWallDist = colliderHit.dist;
+      wallPoint = colliderHit.point;
+      wallNormal = colliderHit.normal;
+    }
+
+    // 2. Test enemy hitboxes STRICTLY closer than hardWallDist (never hits enemies behind any wall/cover!)
+    const enemyMeshes: THREE.Object3D[] = [];
+    for (const agent of this.agents) {
+      if (agent.alive && agent.team === 'enemy') {
+        enemyMeshes.push(...agent.rig.hitMeshes);
+      }
+    }
+    this.raycaster.far = Math.max(0.02, hardWallDist - 0.015);
+    const agentHits = enemyMeshes.length > 0 ? this.raycaster.intersectObjects(enemyMeshes, false) : [];
+
     const endPoint = shot.origin.clone().addScaledVector(shot.direction, shot.weapon.range);
 
-    if (hits.length > 0) {
-      const hit = hits[0];
+    if (agentHits.length > 0 && agentHits[0].distance < hardWallDist - 0.015) {
+      const hit = agentHits[0];
       endPoint.copy(hit.point);
-      const normal = hit.face
-        ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize()
-        : shot.direction.clone().negate();
-
+      const normal = shot.direction.clone().negate();
       const agentId = hit.object.userData.agentId as string | undefined;
-      if (agentId) {
-        const agent = this.agents.find((a) => a.id === agentId);
-        if (agent && agent.alive) {
-          const zone = hit.object.userData.hitZone as 'head' | 'body' | 'leg';
-          const isHead = zone === 'head';
-          const dmg =
-            zone === 'head'
-              ? shot.weapon.damageHead
-              : zone === 'leg'
-              ? shot.weapon.damageLeg
-              : shot.weapon.damageBody;
+      const agent = agentId ? this.agents.find((a) => a.id === agentId) : undefined;
+      if (agent && agent.alive) {
+        const zone = hit.object.userData.hitZone as 'head' | 'body' | 'leg';
+        const isHead = zone === 'head';
+        const dmg =
+          zone === 'head'
+            ? shot.weapon.damageHead
+            : zone === 'leg'
+            ? shot.weapon.damageLeg
+            : shot.weapon.damageBody;
 
-          agent.spottedTimer = 4.0;
-          const res = agent.takeDamage(dmg);
-          this.weapons.spawnImpact(hit.point, normal, true, isHead);
-          this.sound.playHit(isHead);
-          this.hud.showHitmarker(isHead);
+        agent.spottedTimer = 4.0;
+        const res = agent.takeDamage(dmg, shot.direction, isHead);
+        this.weapons.spawnImpact(hit.point, normal, true, isHead, false);
+        this.projectWallBloodSplatter(hit.point, shot.direction, isHead ? 0.96 : 0.68);
+        this.sound.playHit(isHead);
+        this.hud.showHitmarker(isHead);
 
-          if (res.killed) {
-            // Explosive fiery combat burst + ember shower on takedown!
-            this.weapons.spawnExplosion(
-              agent.pos.clone().add(new THREE.Vector3(0, 1.0, 0)),
-              isHead ? 1.1 : 0.85,
-              isHead ? 0xff7b24 : 0xff4624
-            );
-            this.onEnemyKilledByPlayer(agent, shot.weapon.name, isHead);
-          }
+        if (res.killed) {
+          this.weapons.spawnBloodPool(agent.pos, isHead, shot.direction);
+          this.projectWallBloodSplatter(hit.point, shot.direction, isHead ? 1.32 : 1.02);
+          this.weapons.spawnDroppedWeapon(agent.pos, agent.yaw, shot.direction);
+          this.onEnemyKilledByPlayer(agent, shot.weapon.name, isHead);
         }
-      } else {
-        this.weapons.spawnImpact(hit.point, normal, false, false);
       }
+    } else if (wallPoint && wallNormal) {
+      endPoint.copy(wallPoint);
+      this.weapons.spawnImpact(wallPoint, wallNormal, false, false);
     }
 
     this.weapons.spawnTracer(shot.muzzleWorld, endPoint, 0xff6b24, 0.017);
@@ -575,7 +874,8 @@ class SunfireGame {
     if (this.settings.mode === 'skirmish') {
       this.player.shield = Math.min(this.player.maxShield, this.player.shield + 20);
       this.player.heal(15);
-      this.weapons.ammo.vandal.reserve = Math.min(75, this.weapons.ammo.vandal.reserve + 15);
+      const curAmmo = this.weapons.currentAmmo;
+      curAmmo.reserve = Math.min(this.weapons.currentWeapon.reserveMax, curAmmo.reserve + 20);
       this.skirmishRespawnQueue.push(3.2);
       if (this.playerKills % 5 === 0) {
         this.waveNumber += 1;
@@ -603,23 +903,54 @@ class SunfireGame {
     const shooter = this.agents.find((a) => a.id === ev.attackerId);
     if (shooter) shooter.spottedTimer = 3.2;
 
-    this.raycaster.set(ev.muzzleWorld, ev.direction);
-    this.raycaster.near = 0.05;
+    // Anti-wallbang check: if a bot's rifle barrel protrudes into a wall/crate, stop the shot at the wall!
+    let fireOrigin = ev.muzzleWorld;
+    if (shooter) {
+      const shooterEye = shooter.getEyePosition();
+      const eyeToMuzzle = new THREE.Vector3().subVectors(ev.muzzleWorld, shooterEye);
+      const barrelLen = eyeToMuzzle.length();
+      if (barrelLen > 0.05) {
+        const barrelDir = eyeToMuzzle.clone().divideScalar(barrelLen);
+        const barrelBlock = this.raycastSolidColliders(shooterEye, barrelDir, barrelLen);
+        if (barrelBlock) {
+          this.weapons.spawnImpact(barrelBlock.point, barrelBlock.normal, false, false);
+          return;
+        }
+        fireOrigin = shooterEye;
+      }
+    }
+
+    this.raycaster.set(fireOrigin, ev.direction);
+    this.raycaster.near = 0.01;
     this.raycaster.far = 55;
 
     const wallHits = this.raycaster.intersectObjects(this.level.raycastMeshes, false);
-    let maxDist = wallHits.length > 0 ? wallHits[0].distance : 55;
-    let impactPoint = ev.muzzleWorld.clone().addScaledVector(ev.direction, maxDist);
-    let impactNormal: THREE.Vector3 | null =
-      wallHits.length > 0 && wallHits[0].face
+    const colliderHit = this.raycastSolidColliders(fireOrigin, ev.direction, 55);
+    let maxDist = 55;
+    let impactPoint = fireOrigin.clone().addScaledVector(ev.direction, maxDist);
+    let impactNormal: THREE.Vector3 | null = null;
+    let hitWall = false;
+
+    if (wallHits.length > 0) {
+      maxDist = wallHits[0].distance;
+      impactPoint = wallHits[0].point.clone();
+      impactNormal = wallHits[0].face
         ? wallHits[0].face.normal.clone().transformDirection(wallHits[0].object.matrixWorld).normalize()
-        : null;
+        : ev.direction.clone().negate();
+      hitWall = true;
+    }
+    if (colliderHit && colliderHit.dist < maxDist) {
+      maxDist = colliderHit.dist;
+      impactPoint = colliderHit.point;
+      impactNormal = colliderHit.normal;
+      hitWall = true;
+    }
 
     let hitAgent: TacticalAgent | null = null;
     for (const candidate of this.agents) {
       if (!candidate.alive || candidate.team === ev.attackerTeam) continue;
       const hits = this.raycaster.intersectObjects(candidate.rig.hitMeshes, false);
-      if (hits.length > 0 && hits[0].distance < maxDist) {
+      if (hits.length > 0 && hits[0].distance < maxDist - 0.015) {
         maxDist = hits[0].distance;
         impactPoint = hits[0].point.clone();
         hitAgent = candidate;
@@ -634,9 +965,9 @@ class SunfireGame {
         this.player.pos.y + (this.player.crouching ? 0.68 : 1.05),
         this.player.pos.z
       );
-      const t = new THREE.Vector3().subVectors(playerCenter, ev.muzzleWorld).dot(ev.direction);
-      if (t > 0.2 && t < maxDist) {
-        const closest = ev.muzzleWorld.clone().addScaledVector(ev.direction, t);
+      const t = new THREE.Vector3().subVectors(playerCenter, fireOrigin).dot(ev.direction);
+      if (t > 0.2 && t < maxDist - 0.02) {
+        const closest = fireOrigin.clone().addScaledVector(ev.direction, t);
         const horizErr = Math.hypot(closest.x - playerCenter.x, closest.z - playerCenter.z);
         const vertErr = Math.abs(closest.y - playerCenter.y);
         if (horizErr < 0.44 && vertErr < (this.player.crouching ? 0.65 : 0.92)) {
@@ -651,27 +982,31 @@ class SunfireGame {
     this.weapons.spawnTracer(ev.muzzleWorld, impactPoint, tracerCol, 0.028);
 
     if (hitPlayer) {
-      const toAttacker = new THREE.Vector3().subVectors(ev.muzzleWorld, this.player.pos);
+      const toAttacker = new THREE.Vector3().subVectors(fireOrigin, this.player.pos);
       const worldAngle = Math.atan2(toAttacker.x, -toAttacker.z);
       const relAngle = worldAngle + this.player.yaw;
       this.hud.triggerDamage(relAngle);
 
       const res = this.player.takeDamage(ev.damage);
+      this.recordPlayerDamage(ev.attackerName, ev.damage, 'AKM 7.62', res.died);
       if (res.died) {
         this.playerDeaths += 1;
-        this.hud.pushKillfeed(ev.attackerName, 'enemy', 'YOU', 'ally', 'VANDAL 7.62', false);
+        this.hud.pushKillfeed(ev.attackerName, 'enemy', 'YOU', 'ally', 'AKM 7.62', false);
         if (this.settings.mode === 'skirmish') {
           this.finishMatch(false);
         }
       }
     } else if (hitAgent) {
-      const res = hitAgent.takeDamage(ev.damage);
-      if (impactNormal) this.weapons.spawnImpact(impactPoint, impactNormal, true, false);
+      const res = hitAgent.takeDamage(ev.damage, ev.direction, false);
+      if (impactNormal) this.weapons.spawnImpact(impactPoint, impactNormal, true, false, false);
+      this.projectWallBloodSplatter(impactPoint, ev.direction, 0.65);
       if (res.killed) {
-        this.weapons.spawnExplosion(hitAgent.pos.clone().add(new THREE.Vector3(0, 1.0, 0)), 0.85, 0xff5a22);
-        this.hud.pushKillfeed(ev.attackerName, ev.attackerTeam, hitAgent.name, hitAgent.team, 'VANDAL 7.62', false);
+        this.weapons.spawnBloodPool(hitAgent.pos, false, ev.direction);
+        this.projectWallBloodSplatter(impactPoint, ev.direction, 1.0);
+        this.weapons.spawnDroppedWeapon(hitAgent.pos, hitAgent.yaw, ev.direction);
+        this.hud.pushKillfeed(ev.attackerName, ev.attackerTeam, hitAgent.name, hitAgent.team, 'AKM 7.62', false);
       }
-    } else if (impactNormal && wallHits.length > 0) {
+    } else if (impactNormal && hitWall) {
       this.weapons.spawnImpact(impactPoint, impactNormal, false, false);
     }
   }
@@ -815,7 +1150,8 @@ class SunfireGame {
         this.camera,
         this.weapons.currentWeapon.moveSpeedMult,
         this.weapons.recoilPitch,
-        this.weapons.recoilYaw
+        this.weapons.recoilYaw,
+        this.level.mapBounds
       );
 
       if (this.player.alive && this.roundActive) {
@@ -823,12 +1159,13 @@ class SunfireGame {
       } else {
         this.fireJustPressed = false;
       }
+      this.weapons.setVisible(this.player.alive);
       this.weapons.update(
         dt,
         this.player.horizontalSpeed,
         this.player.crouching,
         this.player.grounded,
-        this.adsHeld
+        this.adsHeld && this.player.alive
       );
 
       const playerEye = this.player.getEyePosition();
@@ -842,7 +1179,47 @@ class SunfireGame {
         playerEye,
         camFwd,
         (strength) => this.hud.triggerFlash(strength),
-        (pos) => this.weapons.spawnExplosion(pos, 1.15, 0xffb838)
+        (pos) => this.weapons.spawnExplosion(pos, 1.15, 0xffb838),
+        (ev) => {
+          // Massive fiery frag grenade blast + concussion camera shake + shrapnel hits/kills!
+          this.weapons.spawnExplosion(ev.pos, 2.35, 0xff5a18);
+          if (ev.playerShake > 0) this.player.addShake(ev.playerShake);
+
+          let hitAny = false;
+          let killedAny = false;
+          for (const h of ev.hits) {
+            hitAny = true;
+            const blastDir = new THREE.Vector3().subVectors(h.agent.pos, ev.pos).setY(0.35).normalize();
+            const chestHit = h.agent.pos.clone().add(new THREE.Vector3(0, 1.05, 0));
+            this.weapons.spawnImpact(chestHit, blastDir, true, false, h.killed);
+            this.projectWallBloodSplatter(chestHit, blastDir, h.killed ? 1.18 : 0.72);
+            if (h.killed) {
+              killedAny = true;
+              this.weapons.spawnBloodPool(h.agent.pos, true, blastDir);
+              this.weapons.spawnDroppedWeapon(h.agent.pos, h.agent.yaw, blastDir);
+              this.onEnemyKilledByPlayer(h.agent, 'FRAG GRENADE', false);
+            }
+          }
+          if (hitAny) {
+            this.sound.playHit(killedAny);
+            this.hud.showHitmarker(killedAny);
+          }
+
+          if (ev.playerDamage > 0 && this.player.alive) {
+            const toBlast = new THREE.Vector3().subVectors(ev.pos, this.player.pos);
+            const relAngle = Math.atan2(toBlast.x, -toBlast.z) + this.player.yaw;
+            this.hud.triggerDamage(relAngle);
+            const res = this.player.takeDamage(ev.playerDamage);
+            this.recordPlayerDamage('FRAG GRENADE', ev.playerDamage, 'FRAG GRENADE', res.died);
+            if (res.died) {
+              this.playerDeaths += 1;
+              this.hud.pushKillfeed('YOU', 'ally', 'YOU', 'ally', 'FRAG GRENADE', false);
+              if (this.settings.mode === 'skirmish') {
+                this.finishMatch(false);
+              }
+            }
+          }
+        }
       );
 
       for (const agent of this.agents) {
@@ -871,7 +1248,7 @@ class SunfireGame {
       this.updateRoundRules(dt);
 
       const ammo = this.weapons.currentAmmo;
-      this.hud.updateVitals(this.player.hp, this.player.shield, this.player.stimTimer > 0);
+      this.hud.updateVitals(this.player.hp, this.player.shield, false);
       this.hud.updateWeapon(
         this.weapons.currentWeapon,
         this.weapons.currentSlot,
@@ -880,7 +1257,7 @@ class SunfireGame {
         this.weapons.isReloading,
         this.weapons.reloadProgress
       );
-      this.hud.updateAbilities(this.abilities.charges, this.player.stimTimer > 0);
+      this.hud.updateAbilities(this.abilities.charges);
       this.hud.updateCrosshair(this.weapons.currentSpread, this.weapons.isAds);
       this.hud.updateZone(this.player.getZoneName(this.level.zones));
 
@@ -901,11 +1278,24 @@ class SunfireGame {
         enemyPips
       );
       this.hud.tick(dt, this.player.hp <= 30 && this.player.alive);
+      const nameplates: NameplateTarget[] = [];
+      for (const a of this.agents) {
+        if (a.alive && a.team === 'ally') {
+          nameplates.push({
+            id: a.id,
+            name: a.name,
+            hpRatio: a.hp / Math.max(1, a.maxHp),
+            headWorld: a.getHeadWorldPosition(this.tmpHeadPos.clone()),
+          });
+        }
+      }
+      this.hud.updateNameplates(nameplates, this.camera);
       this.minimap.render(this.player.pos, this.player.yaw, this.agents, this.abilities.smokes);
     } else {
       const t = now * 0.00045;
       this.camera.position.x = this.level.playerSpawn.pos.x + Math.sin(t) * 0.16;
       this.camera.position.y = this.level.playerSpawn.pos.y + 1.66 + Math.cos(t * 1.4) * 0.03;
+      this.weapons.setVisible(true);
       this.weapons.update(dt, 0, false, true, false);
       for (const agent of this.agents) {
         agent.update(
@@ -925,6 +1315,7 @@ class SunfireGame {
       }
     }
 
+    // Render through full-DPR 8x MSAA EffectComposer + selective HDR Bloom on BOTH Factory & Foundry!
     if (this.bloomEnabled && this.composer) {
       this.composer.render();
     } else {
@@ -933,4 +1324,6 @@ class SunfireGame {
   };
 }
 
-new SunfireGame();
+preloadSoldierTemplate().then(() => {
+  new SunfireGame();
+});

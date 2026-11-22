@@ -9,7 +9,7 @@
   --glass-border-hi: rgba(255, 255, 255, 0.18);
   --text-main: #eef3f8;
   --text-dim: rgba(215, 226, 238, 0.62);
-  --ch-color: #00ffbf;
+  --ch-color: #ffffff;
   --ch-gap: 5px;
   --ch-len: 7px;
 }
@@ -1106,6 +1106,113 @@ body {
   font-weight: 600;
   letter-spacing: 1.4px;
   color: var(--text-dim);
+}
+
+/* ==================== CRYZEN FLOATING ALLY NAMEPLATES & DAMAGE HISTORY ==================== */
+#nameplates-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 15;
+}
+
+.ally-nameplate {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, -100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  will-change: transform;
+}
+
+.ally-nameplate-tag {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  color: #70f4ff;
+  background: rgba(8, 22, 38, 0.68);
+  border: 1px solid rgba(56, 235, 255, 0.55);
+  border-radius: 3px;
+  padding: 1px 6px;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
+  box-shadow: 0 0 10px rgba(40, 218, 255, 0.25);
+  white-space: nowrap;
+}
+
+.ally-nameplate-hp {
+  width: 36px;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+
+.ally-nameplate-hp-fill {
+  height: 100%;
+  background: #36eeff;
+}
+
+#damage-history {
+  position: absolute;
+  left: 24px;
+  top: 50%;
+  transform: translateY(-50%);
+  min-width: 248px;
+  background: rgba(11, 15, 22, 0.84);
+  border: 1px solid rgba(255, 59, 84, 0.42);
+  border-left: 3px solid var(--accent-red);
+  border-radius: 6px;
+  padding: 11px 14px;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.48);
+  z-index: 25;
+}
+
+.dh-header {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 2.2px;
+  color: #ff6b7c;
+  margin-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding-bottom: 5px;
+}
+
+#dh-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dh-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dh-attacker {
+  font-weight: 700;
+  color: #ff6b7c;
+  letter-spacing: 0.6px;
+}
+
+.dh-meta {
+  color: rgba(235, 242, 250, 0.88);
+  font-weight: 600;
+}
+
+.dh-hits {
+  color: var(--text-dim);
+  font-size: 11px;
 }
 
 @media (max-width: 760px) {

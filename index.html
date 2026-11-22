@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SUNFIRE // SECTOR 07 Tactical FPS</title>
+    <title>SUNFIRE // Tactical FPS</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -22,6 +22,15 @@
 
     <!-- In-Game Minimal Tactical HUD -->
     <div id="hud" class="hidden">
+      <!-- Cryzen-Style Floating Ally Nameplates Layer -->
+      <div id="nameplates-layer"></div>
+
+      <!-- Cryzen-Style Damage History Panel (shown on player death) -->
+      <div id="damage-history" class="hidden">
+        <div class="dh-header">DAMAGE HISTORY</div>
+        <div id="dh-list"></div>
+      </div>
+
       <!-- Top-Left Radar -->
       <div id="minimap-wrap">
         <canvas id="minimap-canvas" width="184" height="184"></canvas>
@@ -110,9 +119,18 @@
         <div class="hud-panel abilities-panel">
           <div class="ability-slot" id="ab-c" data-key="C">
             <div class="ab-key">C</div>
-            <div class="ab-icon">⚡</div>
-            <div class="ab-name">STIM</div>
-            <div class="ab-charges" id="ab-c-charges">●</div>
+            <div class="ab-icon" style="display:flex;justify-content:center;align-items:center;height:18px;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ff6238" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M10 3h4v3h-4z"/>
+                <path d="M14 4h3l2 3"/>
+                <ellipse cx="12" cy="14" rx="6.5" ry="7.5" fill="rgba(255,98,56,0.22)"/>
+                <line x1="6.2" y1="12" x2="17.8" y2="12"/>
+                <line x1="6.2" y1="16" x2="17.8" y2="16"/>
+                <line x1="12" y1="6.5" x2="12" y2="21.5"/>
+              </svg>
+            </div>
+            <div class="ab-name">FRAG</div>
+            <div class="ab-charges" id="ab-c-charges">●●</div>
           </div>
           <div class="ability-slot" id="ab-q" data-key="Q">
             <div class="ab-key">Q</div>
@@ -132,17 +150,18 @@
         <div class="hud-panel ammo-panel">
           <div class="ammo-top">
             <div class="weapon-meta">
-              <span id="hud-weapon-name">VANDAL 7.62</span>
+              <span id="hud-weapon-name">AKM 7.62</span>
               <span id="hud-fire-mode">AUTO</span>
             </div>
             <div class="ammo-readout">
-              <span id="hud-ammo-mag">25</span>
+              <span id="hud-ammo-mag">30</span>
               <span class="ammo-slash">/</span>
-              <span id="hud-ammo-res">75</span>
+              <span id="hud-ammo-res">120</span>
             </div>
           </div>
           <div class="weapon-slots">
-            <div class="w-slot active" id="wslot-0"><span>1</span> M41-TAC</div>
+            <div class="w-slot active" id="wslot-0"><span>1</span> AKM</div>
+            <div class="w-slot" id="wslot-1"><span>2</span> SCAR-L</div>
           </div>
         </div>
       </div>
@@ -153,6 +172,7 @@
         <span><b>SHIFT</b> Walk</span>
         <span><b>CTRL</b> Crouch</span>
         <span><b>LMB / RMB</b> Fire / ADS</span>
+        <span><b>1 / 2</b> AKM / SCAR-L</span>
         <span><b>R</b> Reload</span>
         <span><b>Q E C</b> Ordnance</span>
         <span><b>ESC</b> Menu</span>
@@ -164,32 +184,38 @@
       <div class="menu-backdrop"></div>
       <div class="menu-shell">
         <div class="menu-header">
-          <div class="brand-tag">SECTOR 07 // FOUNDRY COMBAT ZONE</div>
+          <div class="brand-tag" id="brand-tag">VIKENDI // SNOW COMPOUND</div>
           <h1 class="brand-title">SUNFIRE</h1>
-          <p class="brand-sub">Industrial 3D Tactical Arena — Wet Surface Reflections, Dynamic Firelight &amp; Precision Gunplay</p>
+          <p class="brand-sub">Fast-Paced 3D Tactical Shooter — AKM &amp; SCAR-L Gunplay, Frag Ordnance, Vikendi &amp; Warehouse</p>
         </div>
 
         <div class="menu-grid">
           <div class="menu-card">
-            <div class="card-label">OPERATION MODE</div>
+            <div class="card-label">SELECT MAP</div>
+            <div class="pill-row" id="map-pills" style="margin-bottom: 14px;">
+              <button class="pill active" data-map="factory">VIKENDI</button>
+              <button class="pill" data-map="foundry">WAREHOUSE</button>
+            </div>
+
+            <div class="card-label">GAME MODE</div>
             <div class="mode-list" id="mode-list">
               <button class="mode-btn active" data-mode="tactical">
-                <span class="mode-title">FOUNDRY BREACH (3v5)</span>
-                <span class="mode-desc">First to 5 rounds alongside vanguard allies EMBER &amp; PULSE against 5 hostile units</span>
+                <span class="mode-title">TEAM MATCH (3v5)</span>
+                <span class="mode-desc">First to 5 rounds with teammates EMBER &amp; PULSE against 5 enemies</span>
               </button>
               <button class="mode-btn" data-mode="clutch">
                 <span class="mode-title">SOLO CLUTCH (1v5)</span>
-                <span class="mode-desc">No backup — clear all 5 armored hostiles across tactical rounds</span>
+                <span class="mode-desc">No backup — eliminate all 5 enemies across tactical rounds</span>
               </button>
               <button class="mode-btn" data-mode="skirmish">
                 <span class="mode-title">ENDLESS SKIRMISH</span>
-                <span class="mode-desc">Continuous industrial waves with shield replenishment on elimination</span>
+                <span class="mode-desc">Continuous enemy waves with shield &amp; ammo refill on every kill</span>
               </button>
             </div>
 
             <div class="action-row">
               <button id="btn-deploy" class="btn-primary">
-                <span id="btn-deploy-label">DEPLOY TO SECTOR 07</span>
+                <span id="btn-deploy-label">DEPLOY TO VIKENDI</span>
               </button>
               <button id="btn-restart" class="btn-secondary hidden">RESTART</button>
             </div>
@@ -211,8 +237,8 @@
             <div class="setting-row">
               <label>Reticle Accent</label>
               <div class="swatch-row" id="crosshair-colors">
-                <button class="swatch active" data-color="#00ffbf" style="background:#00ffbf" title="Cyan"></button>
-                <button class="swatch" data-color="#ffffff" style="background:#ffffff" title="White"></button>
+                <button class="swatch active" data-color="#ffffff" style="background:#ffffff" title="White"></button>
+                <button class="swatch" data-color="#00ffbf" style="background:#00ffbf" title="Cyan"></button>
                 <button class="swatch" data-color="#ff4655" style="background:#ff4655" title="Crimson"></button>
                 <button class="swatch" data-color="#ffb038" style="background:#ffb038" title="Amber"></button>
               </div>
@@ -236,7 +262,7 @@
             </div>
 
             <div class="tactical-tip">
-              <b>TACTICAL NOTE:</b> Counter-strafe or <b>Crouch (Ctrl)</b> for pinpoint first-shot accuracy. Deploy <b>E (Smoke)</b> to cut sightlines through the Blast Bulkhead and <b>Q (Flash)</b> to blind defenders.
+              <b>TIP:</b> Press <b>1 / 2</b> (or scroll) to swap between <b>AKM</b> and <b>SCAR-L</b>. Use <b>C (Frag)</b> to flush cover, <b>E (Smoke)</b> to block sightlines, and <b>Q (Flash)</b> before peeking.
             </div>
           </div>
         </div>

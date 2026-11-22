@@ -1,32 +1,61 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { WeaponDef } from '../types';
+import { WeaponDef, WeaponId } from '../types';
 import { SoundEngine } from '../audio/SoundEngine';
 import { TextureLibrary } from '../textures/ProceduralTextures';
+import {
+  buildBrushedGunmetalTexture,
+  buildSharpScarCerakoteTexture,
+  buildSmoothAkWoodTexture,
+  smoothGeometryNormals,
+} from '../utils/MeshSmoothing';
 
-export const WEAPONS: Record<'vandal', WeaponDef> = {
+export const WEAPONS: Record<WeaponId, WeaponDef> = {
   vandal: {
     id: 'vandal',
-    name: 'M41-TAC RIFLE',
+    name: 'AKM 7.62',
     fireMode: 'AUTO',
     damageBody: 40,
     damageHead: 160,
-    damageLeg: 34,
-    fireRate: 9.75,
-    magSize: 25,
-    reserveMax: 75,
-    reloadTime: 2.1,
-    baseSpread: 0.0022,
-    moveSpread: 0.048,
-    crouchMult: 0.65,
-    adsMult: 0.55,
+    damageLeg: 32,
+    fireRate: 9.8,
+    magSize: 30,
+    reserveMax: 120,
+    reloadTime: 2.2,
+    baseSpread: 0.002,
+    moveSpread: 0.045,
+    crouchMult: 0.62,
+    adsMult: 0.5,
     adsFov: 56,
-    recoilPitch: 0.022,
-    recoilYaw: 0.009,
-    equipTime: 0.35,
+    recoilPitch: 0.021,
+    recoilYaw: 0.0085,
+    equipTime: 0.32,
     moveSpeedMult: 1.0,
     automatic: true,
-    range: 110,
+    range: 115,
+  },
+  scarl: {
+    id: 'scarl',
+    name: 'SCAR-L',
+    fireMode: 'AUTO',
+    damageBody: 34,
+    damageHead: 136,
+    damageLeg: 28,
+    fireRate: 10.8,
+    magSize: 30,
+    reserveMax: 120,
+    reloadTime: 1.95,
+    baseSpread: 0.0014,
+    moveSpread: 0.036,
+    crouchMult: 0.58,
+    adsMult: 0.42,
+    adsFov: 53,
+    recoilPitch: 0.0155,
+    recoilYaw: 0.0062,
+    equipTime: 0.3,
+    moveSpeedMult: 1.02,
+    automatic: true,
+    range: 120,
   },
 };
 
@@ -50,6 +79,33 @@ interface ActiveSpark {
   vel: THREE.Vector3;
   life: number;
   maxLife: number;
+  isBlood?: boolean;
+  splattered?: boolean;
+}
+
+interface ActiveBloodPuff {
+  sprite: THREE.Sprite;
+  vel: THREE.Vector3;
+  life: number;
+  maxLife: number;
+  startScale: number;
+  endScale: number;
+  baseOpacity: number;
+}
+
+interface ActiveBloodPool {
+  mesh: THREE.Mesh;
+  life: number;
+  age: number;
+  targetScale: number;
+}
+
+interface DroppedWeapon {
+  group: THREE.Group;
+  vel: THREE.Vector3;
+  rotVel: THREE.Vector3;
+  settled: boolean;
+  life: number;
 }
 
 interface ActiveExplosion {
@@ -73,6 +129,7 @@ interface DynamicPulseLight {
 interface BulletHole {
   mesh: THREE.Mesh;
   life: number;
+  isBlood?: boolean;
 }
 
 export interface ShotResult {
@@ -84,11 +141,12 @@ export interface ShotResult {
 }
 
 export class WeaponSystem {
-  public slotOrder: Array<'vandal'> = ['vandal'];
+  public slotOrder: WeaponId[] = ['vandal', 'scarl'];
   public currentSlot = 0;
 
-  public ammo: Record<'vandal', { mag: number; reserve: number }> = {
-    vandal: { mag: 25, reserve: 75 },
+  public ammo: Record<WeaponId, { mag: number; reserve: number }> = {
+    vandal: { mag: WEAPONS.vandal.magSize, reserve: WEAPONS.vandal.reserveMax },
+    scarl: { mag: WEAPONS.scarl.magSize, reserve: WEAPONS.scarl.reserveMax },
   };
 
   public isReloading = false;
@@ -106,18 +164,36 @@ export class WeaponSystem {
   private consecutiveShots = 0;
   private sprayResetTimer = 0;
   private kickZ = 0;
+  private kickZVel = 0;
   private kickRotX = 0;
+  private kickRotVel = 0;
   private swayX = 0;
   private swayY = 0;
   private adsProgress = 0;
+  private smoothSpeed = 0;
+  private bobPhase = 0;
+  private breathPhase = 0;
 
-  private readonly vandalHipPos = new THREE.Vector3(0.295, -0.195, -0.53);
-  private readonly vandalHipRot = new THREE.Euler(0.038, 0.42, -0.02);
-  private readonly vandalAdsPos = new THREE.Vector3(0.0, -0.168, -0.34);
+  // Cryzen.io-inspired bottom-right hipfire & dead-center ADS framing for both AKM 7.62 and SCAR-L
+  private readonly vandalHipPos = new THREE.Vector3(0.215, -0.178, -0.4);
+  private readonly vandalHipRot = new THREE.Euler(0.012, 0.055, -0.012);
+  private readonly vandalAdsPos = new THREE.Vector3(0.0, -0.116, -0.35);
   private readonly vandalAdsRot = new THREE.Euler(0.0, 0.0, 0.0);
+
+  private readonly scarHipPos = new THREE.Vector3(0.22, -0.172, -0.41);
+  private readonly scarHipRot = new THREE.Euler(0.012, 0.06, -0.012);
+  private readonly scarAdsPos = new THREE.Vector3(0.0, -0.118, -0.27);
+  private readonly scarAdsRot = new THREE.Euler(0.0, 0.0, 0.0);
 
   public viewmodelRoot = new THREE.Group();
   private models: Record<'vandal', THREE.Group>;
+  private akmMeshes: THREE.Object3D[] = [];
+  private scarLGroup: THREE.Group;
+  private scarBoltCarrier: THREE.Object3D | null = null;
+  private scarMagGroup: THREE.Object3D | null = null;
+  private scarMagRestPos = new THREE.Vector3();
+  private akmMuzzlePos = new THREE.Vector3(0, 0.015, -0.58);
+  private scarMuzzlePos = new THREE.Vector3(0, 0.024, -0.6);
   private muzzlePoint = new THREE.Object3D();
   private muzzleFlashGroup = new THREE.Group();
   private muzzleLight = new THREE.PointLight(0xffaa44, 0, 12, 1.5);
@@ -127,6 +203,9 @@ export class WeaponSystem {
   private tracers: ActiveTracer[] = [];
   private shells: ActiveShell[] = [];
   private sparks: ActiveSpark[] = [];
+  private bloodPuffs: ActiveBloodPuff[] = [];
+  private bloodPools: ActiveBloodPool[] = [];
+  private droppedWeapons: DroppedWeapon[] = [];
   private explosions: ActiveExplosion[] = [];
   private pulseLights: DynamicPulseLight[] = [];
   private decals: BulletHole[] = [];
@@ -138,6 +217,7 @@ export class WeaponSystem {
     metalness: 0.9,
   });
   private sparkGeo = new THREE.BoxGeometry(0.024, 0.024, 0.08);
+  private bloodDropGeo = new THREE.SphereGeometry(0.024, 5, 5);
   private emberGeo = new THREE.OctahedronGeometry(0.04, 0);
   private tracerOuterGeo = (() => {
     const g = new THREE.CylinderGeometry(0.35, 0.85, 1, 5, 1, true);
@@ -153,6 +233,7 @@ export class WeaponSystem {
   private expPuffGeo = new THREE.DodecahedronGeometry(0.38, 1);
   private expRingGeo = new THREE.RingGeometry(0.2, 0.36, 20);
   private decalGeo = new THREE.CircleGeometry(0.055, 8);
+  private bloodDecalGeo = new THREE.PlaneGeometry(1, 1);
   private decalMat = new THREE.MeshBasicMaterial({
     color: 0x1e1a17,
     transparent: true,
@@ -161,33 +242,25 @@ export class WeaponSystem {
     polygonOffset: true,
     polygonOffsetFactor: -2,
   });
+  private bloodDecalMat: THREE.MeshStandardMaterial;
+  private bloodWallDecalMat: THREE.MeshStandardMaterial;
+  private bloodDropMats: THREE.MeshStandardMaterial[] = [];
+
+  // Shared materials for dropped Cryzen AKM props on enemy death
+  private dropSteelMat = new THREE.MeshStandardMaterial({ color: 0x454e5e, roughness: 0.38, metalness: 0.76 });
+  private dropWoodMat = new THREE.MeshStandardMaterial({ color: 0xb8622a, roughness: 0.56, metalness: 0.06 });
+  private dropMagMat = new THREE.MeshStandardMaterial({ color: 0x562c20, roughness: 0.5, metalness: 0.16 });
+  private dropDarkMat = new THREE.MeshStandardMaterial({ color: 0x1d2128, roughness: 0.65, metalness: 0.25 });
 
   private lightPool: THREE.PointLight[] = [];
 
-  // External Blender-rigged FPS arms loaded via GLTFLoader (/models/fps_arms.glb)
+  // External Blender-rigged FPS AKM + Arms loaded via GLTFLoader (/models/fps_arms.glb)
   private fpsArmsPivot = new THREE.Group();
   private armsMixer: THREE.AnimationMixer | null = null;
   private armsActions: Record<'idle' | 'shoot' | 'reload', THREE.AnimationAction | null> = {
     idle: null,
     shoot: null,
     reload: null,
-  };
-  private armsSlotOffsets: Record<'vandal', { pos: THREE.Vector3; rot: THREE.Euler; scale: number }> = {
-    vandal: { pos: new THREE.Vector3(), rot: new THREE.Euler(), scale: 1 },
-  };
-  private upperArmL: THREE.Object3D | null = null;
-  private upperArmR: THREE.Object3D | null = null;
-  private upperArmLBasePos = new THREE.Vector3();
-  private upperArmRBasePos = new THREE.Vector3();
-  private armBoneAdjust: Record<
-    'vandal',
-    {
-      lDelta: THREE.Vector3;
-      rDelta: THREE.Vector3;
-      lScale: number;
-    }
-  > = {
-    vandal: { lDelta: new THREE.Vector3(), rDelta: new THREE.Vector3(), lScale: 1 },
   };
   private armsLoaded = false;
 
@@ -200,15 +273,66 @@ export class WeaponSystem {
     this.camera.add(this.viewmodelRoot);
     this.scene.add(this.fxGroup);
 
+    // Photorealistic mirror-wet dark oxblood liquid (roughness 0.04 catches realistic specular glints on Warehouse asphalt
+    // & deep dark crimson contrast on Vikendi snow — ZERO cartoon neon glow or Holi powder look!)
+    this.bloodDecalMat = new THREE.MeshStandardMaterial({
+      map: this.textures?.bloodSplatter ?? null,
+      emissiveMap: this.textures?.bloodSplatter ?? null,
+      emissive: new THREE.Color(0x3a0205),
+      emissiveIntensity: 0.14,
+      color: 0xffffff,
+      roughness: 0.04,
+      metalness: 0.1,
+      envMapIntensity: 2.9,
+      transparent: true,
+      opacity: 0.97,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -4,
+    });
+
+    // Vertical wall blood splatter with glistening downward gravity drips!
+    this.bloodWallDecalMat = new THREE.MeshStandardMaterial({
+      map: this.textures?.bloodWallSplatter ?? this.textures?.bloodSplatter ?? null,
+      emissiveMap: this.textures?.bloodWallSplatter ?? this.textures?.bloodSplatter ?? null,
+      emissive: new THREE.Color(0x3a0205),
+      emissiveIntensity: 0.16,
+      color: 0xffffff,
+      roughness: 0.05,
+      metalness: 0.08,
+      envMapIntensity: 2.75,
+      transparent: true,
+      opacity: 0.96,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -4,
+    });
+
+    // Shared glossy dark viscous arterial droplet materials (deep clot -> fresh dark arterial crimson!)
+    this.bloodDropMats = [0x380205, 0x5c0409, 0x7a070d].map(
+      (hex) =>
+        new THREE.MeshStandardMaterial({
+          color: hex,
+          roughness: 0.06,
+          metalness: 0.08,
+          envMapIntensity: 2.4,
+        })
+    );
+
     // Single shared dynamic combat light (avoids multi-light PBR shader bloat for rock-solid 60 FPS)
     const combatLight = new THREE.PointLight(0xff9c38, 0, 14, 1.5);
     combatLight.visible = false;
     this.fxGroup.add(combatLight);
     this.lightPool.push(combatLight);
 
-    this.models = {
-      vandal: this.buildVandalModel(),
-    };
+    const rifleContainer = new THREE.Group();
+    rifleContainer.position.copy(this.vandalHipPos);
+    rifleContainer.rotation.copy(this.vandalHipRot);
+    this.models = { vandal: rifleContainer };
+
+    this.scarLGroup = this.buildScarLModel();
+    this.scarLGroup.visible = false;
+    rifleContainer.add(this.scarLGroup);
 
     this.viewmodelRoot.add(this.models.vandal);
     this.buildMuzzleFlash();
@@ -217,15 +341,20 @@ export class WeaponSystem {
   }
 
   public get currentWeapon(): WeaponDef {
-    return WEAPONS.vandal;
+    return WEAPONS[this.slotOrder[this.currentSlot]];
   }
 
   public get currentAmmo(): { mag: number; reserve: number } {
-    return this.ammo.vandal;
+    return this.ammo[this.slotOrder[this.currentSlot]];
+  }
+
+  public setVisible(visible: boolean): void {
+    this.viewmodelRoot.visible = visible;
   }
 
   public resetAll(): void {
     this.ammo.vandal = { mag: WEAPONS.vandal.magSize, reserve: WEAPONS.vandal.reserveMax };
+    this.ammo.scarl = { mag: WEAPONS.scarl.magSize, reserve: WEAPONS.scarl.reserveMax };
     this.isReloading = false;
     this.reloadProgress = 0;
     this.isAds = false;
@@ -233,14 +362,45 @@ export class WeaponSystem {
     this.recoilYaw = 0;
     this.consecutiveShots = 0;
     this.kickZ = 0;
+    this.kickZVel = 0;
     this.kickRotX = 0;
-    this.selectSlot(0, true);
+    this.kickRotVel = 0;
+    this.selectSlot(this.currentSlot, true);
+  }
+
+  public cycleSlot(delta: number): void {
+    const next = (this.currentSlot + (delta > 0 ? 1 : -1) + this.slotOrder.length) % this.slotOrder.length;
+    this.selectSlot(next, false);
+  }
+
+  public clearRoundFx(): void {
+    for (const d of this.decals) {
+      this.fxGroup.remove(d.mesh);
+    }
+    this.decals = [];
+
+    for (const bp of this.bloodPools) {
+      this.fxGroup.remove(bp.mesh);
+      (bp.mesh.material as THREE.Material).dispose();
+    }
+    this.bloodPools = [];
+
+    for (const puff of this.bloodPuffs) {
+      this.fxGroup.remove(puff.sprite);
+      puff.sprite.material.dispose();
+    }
+    this.bloodPuffs = [];
+
+    for (const dw of this.droppedWeapons) {
+      this.fxGroup.remove(dw.group);
+    }
+    this.droppedWeapons = [];
   }
 
   public selectSlot(index: number, instant = false): void {
-    if (index !== 0) return;
+    if (index < 0 || index >= this.slotOrder.length) return;
     if (index === this.currentSlot && !instant) return;
-    this.currentSlot = 0;
+    this.currentSlot = index;
     this.isReloading = false;
     this.reloadProgress = 0;
     this.isAds = false;
@@ -250,14 +410,29 @@ export class WeaponSystem {
     this.models.vandal.visible = true;
     this.adsProgress = 0;
 
-    // Parent muzzle FX directly onto rifle barrel so tracers & flash stay locked in hipfire AND ADS!
+    const isScar = this.currentWeapon.id === 'scarl';
+    for (const m of this.akmMeshes) {
+      m.visible = !isScar;
+    }
+    this.scarLGroup.visible = isScar;
+
+    // Parent muzzle FX directly onto active rifle barrel so tracers & flash stay locked in hipfire AND ADS!
     this.models.vandal.add(this.muzzlePoint, this.muzzleFlashGroup, this.muzzleLight);
-    this.muzzlePoint.position.set(0, 0.036, -0.58);
+    this.muzzlePoint.position.copy(isScar ? this.scarMuzzlePos : this.akmMuzzlePos);
     this.muzzleFlashGroup.position.copy(this.muzzlePoint.position);
     this.muzzleLight.position.copy(this.muzzlePoint.position);
-    this.attachArmsToSlot('vandal');
+
+    if (this.armsLoaded) {
+      this.models.vandal.add(this.fpsArmsPivot);
+      this.fpsArmsPivot.visible = true;
+      this.playArmsAnim('idle');
+    }
   }
 
+  /**
+   * Loads the real Blender-rigged AKM rifle + FPS arms from /models/fps_arms.glb
+   * keeping BOTH ArmModel AND AKM_model visible with Cryzen.io styling and skeletal Idle/Shoot/Reload clips!
+   */
   private loadFpsArmsModel(): void {
     const loader = new GLTFLoader();
     loader.load(
@@ -266,52 +441,106 @@ export class WeaponSystem {
         const armsScene = gltf.scene;
         armsScene.rotation.set(0, Math.PI / 2, 0);
 
-        // Hide bundled weapon mesh inside the GLB so only the real Blender skeletal arms/hands render!
+        const akWoodTex = buildSmoothAkWoodTexture();
+        const akSteelTex = buildBrushedGunmetalTexture();
+
+        this.akmMeshes = [];
+        // Keep BOTH ArmModel and AKM_model visible, apply skinning-safe crease-angle normal smoothing
+        // and satin wood/gunmetal textures for silky Cryzen.io visuals (zero harsh flat facets!)
         armsScene.traverse((obj) => {
           const mesh = obj as THREE.Mesh;
-          if (mesh.isMesh) {
-            const lower = (mesh.name || '').toLowerCase();
-            if (lower.includes('akm') || lower.includes('gun') || lower.includes('rifle') || lower.includes('weapon')) {
-              mesh.visible = false;
-              return;
-            }
-            mesh.frustumCulled = false;
-            mesh.castShadow = false;
-            mesh.receiveShadow = false;
+          if (!mesh.isMesh) return;
+          mesh.visible = true;
+          mesh.frustumCulled = false;
+          mesh.castShadow = false;
+          mesh.receiveShadow = false;
 
-            const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-            mats.forEach((mat) => {
-              const std = mat as THREE.MeshStandardMaterial;
-              if (!std || !std.isMeshStandardMaterial) return;
-              const mName = (std.name || '').toLowerCase();
-              std.envMapIntensity = 0.75;
-              if (mName.includes('shirt') || mName.includes('sleeve')) {
-                std.color.setHex(0x28303b);
-                std.roughness = 0.88;
-                std.metalness = 0.04;
-                std.emissive.setHex(0x0b0f16);
-                std.emissiveIntensity = 0.2;
-              } else if (mName.includes('glove')) {
-                std.color.setHex(0x1b1f26);
-                std.roughness = 0.72;
-                std.metalness = 0.14;
-                std.emissive.setHex(0x090b0f);
-                std.emissiveIntensity = 0.18;
-              } else if (mName.includes('skin')) {
-                std.color.setHex(0xdca88e);
-                std.roughness = 0.84;
-                std.metalness = 0.0;
-                std.emissive.setHex(0x362018);
-                std.emissiveIntensity = 0.18;
-              }
-            });
+          const lowerMesh = (mesh.name || '').toLowerCase();
+          if (lowerMesh.includes('akm') || lowerMesh.includes('gun') || lowerMesh.includes('rifle') || lowerMesh.includes('weapon')) {
+            this.akmMeshes.push(mesh);
           }
+          if (mesh.geometry) {
+            // Organic sleeve/hand/glove uses 74° smooth crease; mechanical AKM uses 46° to keep crisp edges
+            smoothGeometryNormals(mesh.geometry, lowerMesh.includes('arm') ? 74 : 46);
+          }
+
+          const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+          mats.forEach((mat) => {
+            const std = mat as THREE.MeshStandardMaterial;
+            if (!std || !std.isMeshStandardMaterial) return;
+            std.flatShading = false;
+            const mName = (std.name || '').toLowerCase();
+            std.envMapIntensity = 1.05;
+            if (mName.includes('shirt') || mName.includes('sleeve')) {
+              std.color.setHex(0x286ce0);
+              std.roughness = 0.72;
+              std.metalness = 0.04;
+              std.emissive.setHex(0x0a1f4a);
+              std.emissiveIntensity = 0.2;
+            } else if (mName.includes('glove')) {
+              std.color.setHex(0x2d343b);
+              std.roughness = 0.68;
+              std.metalness = 0.14;
+              std.emissive.setHex(0x0c0f14);
+              std.emissiveIntensity = 0.15;
+            } else if (mName.includes('skin')) {
+              std.color.setHex(0xe2ad90);
+              std.roughness = 0.76;
+              std.metalness = 0.0;
+              std.emissive.setHex(0x361e14);
+              std.emissiveIntensity = 0.13;
+            } else if (mName.includes('wood')) {
+              std.color.setHex(0xffffff);
+              std.map = akWoodTex;
+              std.roughness = 0.48;
+              std.metalness = 0.04;
+              std.emissive.setHex(0x2c1406);
+              std.emissiveIntensity = 0.14;
+            } else if (mName.includes('bakelite')) {
+              std.color.setHex(0x5e3428);
+              std.roughness = 0.42;
+              std.metalness = 0.18;
+              std.emissive.setHex(0x160a08);
+              std.emissiveIntensity = 0.14;
+            } else if (mName.includes('metal1')) {
+              std.color.setHex(0xaebbd4);
+              std.map = akSteelTex;
+              std.roughness = 0.3;
+              std.metalness = 0.7;
+              std.emissive.setHex(0x141b28);
+              std.emissiveIntensity = 0.16;
+            } else if (mName.includes('metal2')) {
+              std.color.setHex(0x8896b0);
+              std.map = akSteelTex;
+              std.roughness = 0.34;
+              std.metalness = 0.74;
+              std.emissive.setHex(0x10151e);
+              std.emissiveIntensity = 0.15;
+            } else if (mName.includes('metal3')) {
+              std.color.setHex(0x9aa8c0);
+              std.roughness = 0.24;
+              std.metalness = 0.84;
+              std.emissive.setHex(0x161c26);
+              std.emissiveIntensity = 0.15;
+            } else if (mName.includes('bullet')) {
+              std.color.setHex(0xe2b44f);
+              std.roughness = 0.25;
+              std.metalness = 0.88;
+            } else if (mName.includes('black') || mName.includes('darkplastic')) {
+              std.color.setHex(0x252b35);
+              std.roughness = 0.54;
+              std.metalness = 0.24;
+              std.emissive.setHex(0x0a0d12);
+              std.emissiveIntensity = 0.14;
+            }
+            std.needsUpdate = true;
+          });
         });
 
         this.fpsArmsPivot.clear();
         this.fpsArmsPivot.add(armsScene);
 
-        // Initialize skeletal AnimationMixer (Idle / Shoot / Reload) if clips exist in the GLB
+        // Initialize skeletal AnimationMixer (Armature|Idle, Armature|Shoot, Armature|Reload)
         if (gltf.animations && gltf.animations.length > 0) {
           this.armsMixer = new THREE.AnimationMixer(armsScene);
           for (const clip of gltf.animations) {
@@ -336,17 +565,16 @@ export class WeaponSystem {
           this.armsMixer.update(0);
         }
 
-        // Auto-calibrate scale, yaw & grip alignment directly from the rig's Trigger / Magazine / Finger bones!
+        // Auto-calibrate yaw, real-world AKM scale & exact receiver/muzzle anchor directly from GLB bones!
         this.fpsArmsPivot.position.set(0, 0, 0);
         this.fpsArmsPivot.rotation.set(0, 0, 0);
         this.fpsArmsPivot.scale.setScalar(1);
         this.fpsArmsPivot.updateMatrixWorld(true);
 
-        // Helper immune to Three.js GLTFLoader dot-stripping (e.g. "UpperArm.R.001" -> "UpperArmR001")
         const findNode = (pattern: RegExp): THREE.Object3D | null => {
           let found: THREE.Object3D | null = null;
           armsScene.traverse((obj) => {
-            if (!found && obj.name && pattern.test(obj.name.replace(/[._]/g, ''))) {
+            if (!found && obj.name && pattern.test(obj.name.replace(/[:._]/g, ''))) {
               found = obj;
             }
           });
@@ -355,143 +583,109 @@ export class WeaponSystem {
 
         const triggerBone = findNode(/^trigger$/i);
         const magBone = findNode(/^magazine$/i);
-        this.upperArmL = findNode(/^upperarml$/i);
-        this.upperArmR = findNode(/^upperarmr0*1?$/i);
-        if (this.upperArmL) this.upperArmLBasePos.copy(this.upperArmL.position);
-        if (this.upperArmR) this.upperArmRBasePos.copy(this.upperArmR.position);
+        const boltBone = findNode(/^bolt$/i);
+        const handLBone = findNode(/^handl$/i);
 
-        const leftGripBone =
-          findNode(/^doublefingersl$/i) ??
-          findNode(/^doublefingersbeginning$/i) ??
-          findNode(/^handl$/i);
-        const rightFingerBone =
-          findNode(/^doublefingersr0*1?$/i) ??
-          findNode(/^handr0*1?$/i);
-        const rightGripBone = triggerBone ?? rightFingerBone;
+        if (triggerBone && magBone) {
+          const trigW = new THREE.Vector3();
+          const magW = new THREE.Vector3();
+          triggerBone.getWorldPosition(trigW);
+          magBone.getWorldPosition(magW);
 
-        if (leftGripBone && rightGripBone) {
-          const rawL = new THREE.Vector3();
-          const rawR = new THREE.Vector3();
-          leftGripBone.getWorldPosition(rawL);
-          rightGripBone.getWorldPosition(rawR);
-
-          // Auto-align horizontal forward vector (Trigger -> Magazine) strictly along -Z
-          const fwdRef = magBone ? new THREE.Vector3() : rawL.clone();
-          if (magBone) magBone.getWorldPosition(fwdRef);
-          const dx = fwdRef.x - rawR.x;
-          const dz = fwdRef.z - rawR.z;
+          // Point Trigger -> Magazine strictly forward along -Z
+          const dx = magW.x - trigW.x;
+          const dz = magW.z - trigW.z;
           const curYaw = Math.atan2(dx, dz);
-          const targetYaw = Math.PI; // -Z forward in camera space
-          armsScene.rotation.y += targetYaw - curYaw;
+          armsScene.rotation.y += Math.PI - curYaw;
           this.fpsArmsPivot.updateMatrixWorld(true);
 
-          leftGripBone.getWorldPosition(rawL);
-          rightGripBone.getWorldPosition(rawR);
-          const rawSpan = rawL.distanceTo(rawR);
+          triggerBone.getWorldPosition(trigW);
+          magBone.getWorldPosition(magW);
 
-          // Helper: converts a desired offset in weapon space into Armature-local bone translation delta
-          const toArmatureLocalDelta = (bone: THREE.Object3D | null, weaponDelta: THREE.Vector3, pivotScale: number) => {
-            if (!bone?.parent) return new THREE.Vector3();
-            // Apply pivotScale temporarily to read exact parent matrix
-            this.fpsArmsPivot.scale.setScalar(pivotScale);
-            this.fpsArmsPivot.updateMatrixWorld(true);
-            const invParent = bone.parent.matrixWorld.clone().invert();
-            const e = invParent.elements;
-            // Apply linear 3x3 part of invParent (includes both inverse rotation AND inverse scale!)
-            const localDelta = new THREE.Vector3(
-              weaponDelta.x * e[0] + weaponDelta.y * e[4] + weaponDelta.z * e[8],
-              weaponDelta.x * e[1] + weaponDelta.y * e[5] + weaponDelta.z * e[9],
-              weaponDelta.x * e[2] + weaponDelta.y * e[6] + weaponDelta.z * e[10]
-            );
-            this.fpsArmsPivot.scale.setScalar(1);
-            this.fpsArmsPivot.updateMatrixWorld(true);
-            return localDelta;
-          };
+          // Scale so AKM Trigger -> Hand.L matches ~0.30m (authentic AKM proportions)
+          let akmScale = 0.082;
+          if (handLBone) {
+            const handW = new THREE.Vector3();
+            handLBone.getWorldPosition(handW);
+            const rawGripSpan = handW.distanceTo(trigW);
+            if (rawGripSpan > 0.001) {
+              akmScale = 0.305 / rawGripSpan;
+            }
+          }
 
-          // 1. VANDAL RIFLE: Keep left hand locked cleanly onto the front handguard,
-          //    and shift ONLY the right arm cleanly down onto the pistol grip BELOW the tan receiver & stock!
-          const targetR = new THREE.Vector3(0.0, -0.048, 0.072);
-          const targetL = new THREE.Vector3(-0.015, -0.012, -0.31);
-          const rifleScale = rawSpan > 0.001 ? (targetL.distanceTo(targetR) / rawSpan) * 1.06 : 0.08;
+          // Anchor Bolt/Receiver dead-center on X=0, top sight line near Y=0.045, trigger near Z=0.06
+          const anchorRaw = boltBone ? new THREE.Vector3() : trigW.clone();
+          if (boltBone) boltBone.getWorldPosition(anchorRaw);
 
-          const scaledR = rawR.clone().multiplyScalar(rifleScale);
-          const rifleOffset = targetR.clone().sub(scaledR);
-          rifleOffset.y += 0.026; // Keeps left hand cradling the handguard cleanly above the HUD
+          const scaledAnchor = anchorRaw.clone().multiplyScalar(akmScale);
+          // Desired position of Bolt in models.vandal local space: (0, -0.015, -0.03)
+          const offset = new THREE.Vector3(0.0, -0.015, -0.03).sub(scaledAnchor);
 
-          this.armsSlotOffsets.vandal = {
-            pos: rifleOffset,
-            rot: new THREE.Euler(0, 0, 0),
-            scale: rifleScale,
-          };
-          // Drop right hand cleanly out of the tan stock/receiver down onto the pistol grip!
-          this.armBoneAdjust.vandal = {
-            lDelta: new THREE.Vector3(),
-            rDelta: toArmatureLocalDelta(this.upperArmR, new THREE.Vector3(0.016, -0.078, 0.022), rifleScale),
-            lScale: 1,
-          };
+          this.fpsArmsPivot.scale.setScalar(akmScale);
+          this.fpsArmsPivot.position.copy(offset);
+
+          // Calibrate exact muzzle tip from scaled Trigger -> Magazine vector (~0.56m ahead of Bolt!)
+          const scaledTrig = trigW.clone().multiplyScalar(akmScale).add(offset);
+          const muzzleZ = scaledTrig.z - 0.64;
+          const muzzleY = scaledTrig.y + 0.068;
+          this.akmMuzzlePos.set(0, muzzleY, muzzleZ);
+          const isScar = this.currentWeapon.id === 'scarl';
+          this.muzzlePoint.position.copy(isScar ? this.scarMuzzlePos : this.akmMuzzlePos);
+          this.muzzleFlashGroup.position.copy(this.muzzlePoint.position);
+          this.muzzleLight.position.copy(this.muzzlePoint.position);
         } else {
-          // Generic fallback for any custom drop-in public/models/fps_arms.glb
-          this.armsSlotOffsets.vandal = {
-            pos: new THREE.Vector3(0, -0.16, -0.08),
-            rot: new THREE.Euler(0, 0, 0),
-            scale: 0.08,
-          };
+          this.fpsArmsPivot.scale.setScalar(0.082);
+          this.fpsArmsPivot.position.set(0, -0.14, -0.06);
         }
 
+        const isScarNow = this.currentWeapon.id === 'scarl';
+        for (const m of this.akmMeshes) {
+          m.visible = !isScarNow;
+        }
+        this.scarLGroup.visible = isScarNow;
+
         this.armsLoaded = true;
-        this.attachArmsToSlot('vandal');
+        this.models.vandal.add(this.fpsArmsPivot);
+        this.fpsArmsPivot.visible = true;
+        this.playArmsAnim('idle');
       },
       undefined,
       (err) => {
-        console.warn('[WeaponSystem] Could not load /models/fps_arms.glb; using clean weapon-only viewmodel.', err);
+        console.warn('[WeaponSystem] Could not load /models/fps_arms.glb.', err);
       }
     );
   }
 
-  private attachArmsToSlot(id: 'vandal'): void {
-    if (!this.armsLoaded) return;
-    const cfg = this.armsSlotOffsets[id];
-    this.models[id].add(this.fpsArmsPivot);
-    this.fpsArmsPivot.visible = true;
-    this.fpsArmsPivot.position.copy(cfg.pos);
-    this.fpsArmsPivot.rotation.copy(cfg.rot);
-    this.fpsArmsPivot.scale.setScalar(cfg.scale);
-    this.playArmsAnim('idle');
-    this.applyArmBonePose(id);
-  }
-
-  private applyArmBonePose(id: 'vandal'): void {
-    if (!this.armsLoaded) return;
-    const adj = this.armBoneAdjust[id];
-    if (this.upperArmL) {
-      this.upperArmL.scale.setScalar(adj.lScale);
-      if (!this.isReloading) {
-        this.upperArmL.position.copy(this.upperArmLBasePos).add(adj.lDelta);
-      }
-    }
-    if (this.upperArmR) {
-      this.upperArmR.scale.setScalar(1);
-      this.upperArmR.position.copy(this.upperArmRBasePos).add(adj.rDelta);
-    }
-  }
-
   private playArmsAnim(kind: 'idle' | 'shoot' | 'reload'): void {
     if (!this.armsMixer) return;
-    const target = this.armsActions[kind] ?? this.armsActions.idle;
-    if (!target) return;
+    const idle = this.armsActions.idle;
+    const shoot = this.armsActions.shoot;
+    const reload = this.armsActions.reload;
+
     if (kind === 'idle') {
-      this.armsActions.reload?.stop();
-      this.armsActions.shoot?.stop();
-      target.reset().play();
+      reload?.fadeOut(0.18);
+      shoot?.fadeOut(0.1);
+      if (idle) {
+        idle.enabled = true;
+        idle.setEffectiveWeight(1);
+        idle.reset().fadeIn(0.16).play();
+      }
     } else if (kind === 'shoot') {
-      target.stop();
-      target.timeScale = 1.6;
-      target.reset().play();
+      if (shoot) {
+        shoot.enabled = true;
+        shoot.timeScale = 1.65;
+        shoot.setEffectiveWeight(0.85);
+        shoot.reset().fadeIn(0.025).play();
+      }
     } else if (kind === 'reload') {
-      this.armsActions.shoot?.stop();
-      const clipDur = target.getClip().duration || 2.1;
-      target.timeScale = clipDur / Math.max(0.5, this.currentWeapon.reloadTime);
-      target.reset().play();
+      shoot?.fadeOut(0.08);
+      if (reload) {
+        const clipDur = reload.getClip().duration || 2.2;
+        reload.enabled = true;
+        reload.timeScale = clipDur / Math.max(0.5, this.currentWeapon.reloadTime);
+        reload.setEffectiveWeight(1);
+        reload.reset().fadeIn(0.14).play();
+      }
     }
   }
 
@@ -555,7 +749,7 @@ export class WeaponSystem {
     if (crouching) spread *= w.crouchMult;
     if (this.isAds) spread *= w.adsMult;
     if (this.consecutiveShots >= 2) {
-      spread += Math.min(0.045, (this.consecutiveShots - 1) * 0.0046);
+      spread += Math.min(0.045, (this.consecutiveShots - 1) * 0.0044);
     }
 
     const right = new THREE.Vector3().crossVectors(forward, THREE.Object3D.DEFAULT_UP).normalize();
@@ -569,8 +763,8 @@ export class WeaponSystem {
       .addScaledVector(up, Math.sin(randAng) * randRad)
       .normalize();
 
-    const crouchRecoil = crouching ? 0.75 : 1.0;
-    const adsRecoil = this.isAds ? 0.82 : 1.0;
+    const crouchRecoil = crouching ? 0.74 : 1.0;
+    const adsRecoil = this.isAds ? 0.8 : 1.0;
     const pitchKick = w.recoilPitch * crouchRecoil * adsRecoil * (0.9 + Math.random() * 0.25);
     const yawDir = this.consecutiveShots > 4 ? Math.sin(this.consecutiveShots * 0.75) : (Math.random() - 0.5) * 0.5;
     const yawKick = w.recoilYaw * crouchRecoil * yawDir;
@@ -580,13 +774,17 @@ export class WeaponSystem {
 
     this.consecutiveShots += 1;
     this.sprayResetTimer = 0.34;
-    this.kickZ = 0.074;
-    this.kickRotX = 0.105;
+    this.kickZVel += w.id === 'scarl' ? 0.56 : 0.72;
+    this.kickRotVel += w.id === 'scarl' ? 0.78 : 1.05;
 
     this.triggerMuzzleFlash();
     this.spawnBrassShell(muzzleWorld, right, up, forward);
     this.playArmsAnim('shoot');
-    this.sound.playVandalShot(1.0);
+    if (w.id === 'scarl') {
+      this.sound.playScarShot(1.0);
+    } else {
+      this.sound.playVandalShot(1.0);
+    }
 
     if (this.currentAmmo.mag === 0 && this.currentAmmo.reserve > 0) {
       setTimeout(() => {
@@ -654,58 +852,267 @@ export class WeaponSystem {
     this.tracers.push({ group, outerMat, coreMat, life: 0.075, maxLife: 0.075 });
   }
 
-  public spawnImpact(point: THREE.Vector3, normal: THREE.Vector3, isAgent: boolean, headshot = false): void {
-    const sparkColor = isAgent ? (headshot ? 0xffe066 : 0xd6342c) : 0xe0d2bc;
-    const count = isAgent ? (headshot ? 12 : 7) : 7;
+  /**
+   * Realistic dark viscous arterial blood impact spray (sharp velocity-stretched liquid streaks,
+   * heavy liquid gravity, brief tight pressurized dark mist — ZERO cartoon Holi powder clouds!)
+   * + crisp sparks & bullet holes on solid surfaces!
+   */
+  public spawnImpact(
+    point: THREE.Vector3,
+    normal: THREE.Vector3,
+    isAgent: boolean,
+    headshot = false,
+    deathBurst = false
+  ): void {
+    if (isAgent) {
+      // 1. Tight, ultra-brief pressurized dark-crimson mist snap (NOT a giant lingering bright powder cloud!)
+      const puffCount = deathBurst ? 3 : headshot ? 2 : 1;
+      for (let i = 0; i < puffCount; i++) {
+        const sMat = new THREE.SpriteMaterial({
+          map: this.textures?.bloodMistSprite ?? null,
+          color: i === 0 ? 0x6e060b : 0x420205,
+          transparent: true,
+          opacity: deathBurst ? 0.62 : headshot ? 0.55 : 0.44,
+          depthWrite: false,
+          rotation: Math.random() * Math.PI * 2,
+        });
+        const sprite = new THREE.Sprite(sMat);
+        sprite.position.copy(point).addScaledVector(normal, 0.03);
+        const startScale = headshot || deathBurst ? 0.16 : 0.12;
+        sprite.scale.set(startScale, startScale, 1);
 
-    if (headshot) {
-      this.spawnPulseLight(point, 0xffd066, 9, 0.06, 6);
+        const vel = normal
+          .clone()
+          .multiplyScalar(1.2 + Math.random() * 1.6)
+          .add(new THREE.Vector3((Math.random() - 0.5) * 0.9, 0.15 + Math.random() * 0.55, (Math.random() - 0.5) * 0.9));
+        this.fxGroup.add(sprite);
+        this.bloodPuffs.push({
+          sprite,
+          vel,
+          life: deathBurst ? 0.24 : 0.18,
+          maxLife: deathBurst ? 0.24 : 0.18,
+          startScale,
+          endScale: deathBurst ? 0.62 : headshot ? 0.52 : 0.36,
+          baseOpacity: sMat.opacity,
+        });
+      }
+
+      // 2. Heavy dark viscous arterial liquid jets & sharp droplets arcing violently under gravity!
+      const dropCount = deathBurst ? 32 : headshot ? 24 : 14;
+      for (let i = 0; i < dropCount; i++) {
+        const mat = this.bloodDropMats[i % this.bloodDropMats.length];
+        const m = new THREE.Mesh(this.bloodDropGeo, mat);
+        m.position.copy(point).addScaledVector(normal, 0.03);
+        const sc = (deathBurst ? 1.15 : headshot ? 1.05 : 0.82) * (0.45 + Math.random() * 0.95);
+        m.scale.set(sc * 0.62, sc * 0.62, sc * 2.8);
+
+        // Strong focused pressurized exit jet (70% blasting out exit side, 30% tight spatter back)
+        const isExitJet = i % 3 !== 0;
+        const speed = (isExitJet ? 3.2 : 1.6) + Math.random() * (deathBurst ? 5.2 : 3.8);
+        const coneSpread = isExitJet ? 1.9 : 2.6;
+        const vel = normal
+          .clone()
+          .multiplyScalar(isExitJet ? -speed : speed)
+          .add(
+            new THREE.Vector3(
+              (Math.random() - 0.5) * coneSpread,
+              0.45 + Math.random() * (deathBurst ? 2.8 : headshot ? 2.4 : 1.5),
+              (Math.random() - 0.5) * coneSpread
+            )
+          );
+        m.lookAt(m.position.clone().add(vel));
+
+        this.fxGroup.add(m);
+        this.sparks.push({
+          mesh: m,
+          vel,
+          life: 0.65 + Math.random() * 0.45,
+          maxLife: 1.1,
+          isBlood: true,
+        });
+        this.trimSparksPool();
+      }
+      return;
     }
 
+    // Standard concrete / metal impact sparks + dark bullet hole decal
+    const count = 7;
     for (let i = 0; i < count; i++) {
       const mat = new THREE.MeshBasicMaterial({
-        color: i % 3 === 0 && !isAgent ? 0xffb84d : sparkColor,
+        color: i % 3 === 0 ? 0xffb84d : 0xdad0c2,
         transparent: true,
         opacity: 0.92,
       });
       const m = new THREE.Mesh(this.sparkGeo, mat);
       m.position.copy(point).addScaledVector(normal, 0.03);
-      const scale = headshot ? 1.25 : 0.85;
-      m.scale.setScalar(scale * (0.55 + Math.random() * 0.8));
+      m.scale.setScalar(0.82 * (0.55 + Math.random() * 0.8));
 
       const vel = normal
         .clone()
         .multiplyScalar(2.4 + Math.random() * 4.2)
         .add(
           new THREE.Vector3(
-            (Math.random() - 0.5) * 3.8,
-            0.7 + Math.random() * 2.8,
-            (Math.random() - 0.5) * 3.8
+            (Math.random() - 0.5) * 3.6,
+            0.7 + Math.random() * 2.6,
+            (Math.random() - 0.5) * 3.6
           )
         );
       m.lookAt(m.position.clone().add(vel));
 
       this.fxGroup.add(m);
       this.sparks.push({ mesh: m, vel, life: 0.24 + Math.random() * 0.2, maxLife: 0.42 });
-      if (this.sparks.length > 36) {
-        const old = this.sparks.shift();
-        if (old) {
-          this.fxGroup.remove(old.mesh);
-          (old.mesh.material as THREE.Material).dispose();
-        }
+      this.trimSparksPool();
+    }
+
+    const hole = new THREE.Mesh(this.decalGeo, this.decalMat);
+    hole.position.copy(point).addScaledVector(normal, 0.015);
+    hole.lookAt(point.clone().add(normal));
+    this.fxGroup.add(hole);
+    this.decals.push({ mesh: hole, life: 18 });
+    this.trimDecalsPool();
+  }
+
+  /**
+   * Chilling dark arterial death spurt + slow creeping glossy oxblood floor pool oozing beneath the body
+   * over 3.6 seconds + directional cast-off splatters!
+   */
+  public spawnBloodPool(pos: THREE.Vector3, headshot = false, impulseDir?: THREE.Vector3): void {
+    const sprayNormal = impulseDir
+      ? impulseDir.clone().negate().setY(0.18).normalize()
+      : new THREE.Vector3(0, 0.4, 1);
+
+    // Violent heavy liquid arterial spurt from chest/head
+    const chestPos = pos.clone().add(new THREE.Vector3(0, headshot ? 1.46 : 1.04, 0));
+    this.spawnImpact(chestPos, sprayNormal, true, headshot, true);
+
+    // Slowly creeping, mirror-wet dark oxblood pool bleeding out beneath the fallen soldier!
+    const poolMat = this.bloodDecalMat.clone();
+    poolMat.opacity = 0.97;
+    const pool = new THREE.Mesh(this.bloodDecalGeo, poolMat);
+    pool.rotation.x = -Math.PI / 2;
+    pool.rotation.z = Math.random() * Math.PI * 2;
+    const shiftX = impulseDir ? impulseDir.x * 0.38 : (Math.random() - 0.5) * 0.25;
+    const shiftZ = impulseDir ? impulseDir.z * 0.38 : (Math.random() - 0.5) * 0.25;
+    pool.position.set(pos.x + shiftX, 0.028, pos.z + shiftZ);
+    pool.scale.setScalar(0.14);
+    this.fxGroup.add(pool);
+
+    this.bloodPools.push({
+      mesh: pool,
+      life: 36,
+      age: 0,
+      targetScale: headshot ? 1.85 : 1.52,
+    });
+    if (this.bloodPools.length > 24) {
+      const old = this.bloodPools.shift();
+      if (old) {
+        this.fxGroup.remove(old.mesh);
+        (old.mesh.material as THREE.Material).dispose();
       }
     }
 
-    if (!isAgent) {
-      const hole = new THREE.Mesh(this.decalGeo, this.decalMat);
-      hole.position.copy(point).addScaledVector(normal, 0.015);
-      hole.lookAt(point.clone().add(normal));
-      this.fxGroup.add(hole);
-      this.decals.push({ mesh: hole, life: 16 });
-      if (this.decals.length > 30) {
-        const old = this.decals.shift();
-        if (old) this.fxGroup.remove(old.mesh);
+    // Directional cast-off blood spatter arc in the direction the body collapsed
+    const splatCount = headshot ? 5 : 3;
+    for (let i = 0; i < splatCount; i++) {
+      const baseAng = impulseDir ? Math.atan2(impulseDir.z, impulseDir.x) : Math.random() * Math.PI * 2;
+      const ang = baseAng + (Math.random() - 0.5) * 1.45;
+      const dist = 0.48 + Math.random() * 0.85;
+      const sx = pos.x + shiftX + Math.cos(ang) * dist;
+      const sz = pos.z + shiftZ + Math.sin(ang) * dist;
+      this.spawnFloorBloodSplatter(sx, sz, 0.34 + Math.random() * 0.42);
+    }
+  }
+
+  /**
+   * Stamps a realistic glossy dark arterial splatter WITH downward gravity blood drips onto walls behind a shot victim!
+   */
+  public spawnWallBloodSplatter(point: THREE.Vector3, normal: THREE.Vector3, scale = 0.82): void {
+    const splat = new THREE.Mesh(this.bloodDecalGeo, this.bloodWallDecalMat);
+    // Shift slightly downward so drips cascade cleanly down from the impact entry height
+    splat.position.copy(point).addScaledVector(normal, 0.024);
+    splat.position.y = Math.max(0.42, splat.position.y - scale * 0.16);
+    splat.up.set(0, 1, 0);
+    splat.lookAt(splat.position.clone().add(normal));
+    const s = scale * (0.88 + Math.random() * 0.38);
+    splat.scale.set(s * 0.92, s * 1.18, 1);
+    this.fxGroup.add(splat);
+    this.decals.push({ mesh: splat, life: 32, isBlood: true });
+    this.trimDecalsPool();
+  }
+
+  /**
+   * Cryzen.io-style dropped AKM rifle clattering onto the ground when an enemy or ally falls!
+   */
+  public spawnDroppedWeapon(pos: THREE.Vector3, yaw: number, impulseDir?: THREE.Vector3): void {
+    const gun = new THREE.Group();
+    const rec = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.075, 0.34), this.dropSteelMat);
+    gun.add(rec);
+    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.088, 0.24), this.dropWoodMat);
+    stock.position.set(0, -0.02, -0.27);
+    gun.add(stock);
+    const hg = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.058, 0.24), this.dropWoodMat);
+    hg.position.set(0, 0.005, 0.28);
+    gun.add(hg);
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.013, 0.014, 0.3, 6), this.dropSteelMat);
+    barrel.rotation.x = Math.PI / 2;
+    barrel.position.set(0, 0.012, 0.52);
+    gun.add(barrel);
+    const mag = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.19, 0.068), this.dropMagMat);
+    mag.position.set(0, -0.11, 0.09);
+    mag.rotation.x = -0.28;
+    gun.add(mag);
+    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.1, 0.044), this.dropDarkMat);
+    grip.position.set(0, -0.075, -0.09);
+    grip.rotation.x = 0.25;
+    gun.add(grip);
+
+    gun.position.set(pos.x, pos.y + 1.05, pos.z);
+    gun.rotation.set((Math.random() - 0.5) * 0.4, yaw + (Math.random() - 0.5) * 0.7, (Math.random() - 0.5) * 0.5);
+    this.fxGroup.add(gun);
+
+    const vel = new THREE.Vector3((Math.random() - 0.5) * 2.4, 2.2 + Math.random() * 1.1, (Math.random() - 0.5) * 2.4);
+    if (impulseDir) {
+      vel.addScaledVector(impulseDir, 2.0);
+    }
+
+    this.droppedWeapons.push({
+      group: gun,
+      vel,
+      rotVel: new THREE.Vector3((Math.random() - 0.5) * 8, (Math.random() - 0.5) * 7, 5 + Math.random() * 4),
+      settled: false,
+      life: 25,
+    });
+    if (this.droppedWeapons.length > 10) {
+      const old = this.droppedWeapons.shift();
+      if (old) this.fxGroup.remove(old.group);
+    }
+  }
+
+  private spawnFloorBloodSplatter(x: number, z: number, scale: number): void {
+    const splat = new THREE.Mesh(this.bloodDecalGeo, this.bloodDecalMat);
+    splat.rotation.x = -Math.PI / 2;
+    splat.rotation.z = Math.random() * Math.PI * 2;
+    splat.position.set(x, 0.027 + Math.random() * 0.005, z);
+    splat.scale.setScalar(scale);
+    this.fxGroup.add(splat);
+    this.decals.push({ mesh: splat, life: 28, isBlood: true });
+    this.trimDecalsPool();
+  }
+
+  private trimSparksPool(): void {
+    while (this.sparks.length > 220) {
+      const old = this.sparks.shift();
+      if (old) {
+        this.fxGroup.remove(old.mesh);
+        if (!old.isBlood) (old.mesh.material as THREE.Material).dispose();
       }
+    }
+  }
+
+  private trimDecalsPool(): void {
+    while (this.decals.length > 110) {
+      const old = this.decals.shift();
+      if (old) this.fxGroup.remove(old.mesh);
     }
   }
 
@@ -785,10 +1192,10 @@ export class WeaponSystem {
     this.muzzleFlashTimer = 0.04;
     this.muzzleFlashGroup.visible = true;
     this.muzzleFlashGroup.rotation.z = Math.random() * Math.PI;
-    const baseScale = this.isAds ? 0.62 : 0.96;
+    const baseScale = this.isAds ? 0.55 : 0.88;
     const s = baseScale * (0.9 + Math.random() * 0.26);
     this.muzzleFlashGroup.scale.setScalar(s);
-    this.muzzleLight.intensity = 11 + Math.random() * 3;
+    this.muzzleLight.intensity = 10 + Math.random() * 3;
   }
 
   private spawnBrassShell(
@@ -859,7 +1266,6 @@ export class WeaponSystem {
 
     if (this.armsMixer) {
       this.armsMixer.update(dt);
-      this.applyArmBonePose(w.id);
     }
 
     if (this.sprayResetTimer > 0) {
@@ -888,42 +1294,88 @@ export class WeaponSystem {
       }
     }
 
-    this.kickZ = THREE.MathUtils.lerp(this.kickZ, 0, Math.min(1, dt * 18));
-    this.kickRotX = THREE.MathUtils.lerp(this.kickRotX, 0, Math.min(1, dt * 16));
-    this.swayX = THREE.MathUtils.lerp(this.swayX, 0, Math.min(1, dt * 10));
-    this.swayY = THREE.MathUtils.lerp(this.swayY, 0, Math.min(1, dt * 10));
+    // Critically-damped spring recoil recovery (buttery smooth punch + zero jitter!)
+    const stiffness = 195;
+    const damping = 26;
+    const az = -stiffness * this.kickZ - damping * this.kickZVel;
+    this.kickZVel += az * dt;
+    this.kickZ = THREE.MathUtils.clamp(this.kickZ + this.kickZVel * dt, -0.02, 0.08);
 
-    const t = performance.now() * 0.001;
+    const ar = -stiffness * this.kickRotX - damping * this.kickRotVel;
+    this.kickRotVel += ar * dt;
+    this.kickRotX = THREE.MathUtils.clamp(this.kickRotX + this.kickRotVel * dt, -0.04, 0.14);
+
+    const swayLerp = 1 - Math.exp(-12 * dt);
+    this.swayX = THREE.MathUtils.lerp(this.swayX, 0, swayLerp);
+    this.swayY = THREE.MathUtils.lerp(this.swayY, 0, swayLerp);
+
     const adsTarget = this.isAds ? 1 : 0;
-    this.adsProgress = THREE.MathUtils.lerp(this.adsProgress, adsTarget, Math.min(1, dt * 14));
+    this.adsProgress = THREE.MathUtils.lerp(this.adsProgress, adsTarget, 1 - Math.exp(-15 * dt));
+    // Cubic smoothstep easing for ultra-silky ADS zoom-in/out!
+    const adsEase = this.adsProgress * this.adsProgress * (3 - 2 * this.adsProgress);
 
-    // Smooth hipfire <-> true red-dot ADS interpolation on primary rifle
-    this.models.vandal.position.lerpVectors(this.vandalHipPos, this.vandalAdsPos, this.adsProgress);
+    const isScar = w.id === 'scarl';
+    const hipPos = isScar ? this.scarHipPos : this.vandalHipPos;
+    const hipRot = isScar ? this.scarHipRot : this.vandalHipRot;
+    const adsPos = isScar ? this.scarAdsPos : this.vandalAdsPos;
+    const adsRot = isScar ? this.scarAdsRot : this.vandalAdsRot;
+
+    this.models.vandal.position.lerpVectors(hipPos, adsPos, adsEase);
     this.models.vandal.rotation.set(
-      THREE.MathUtils.lerp(this.vandalHipRot.x, this.vandalAdsRot.x, this.adsProgress),
-      THREE.MathUtils.lerp(this.vandalHipRot.y, this.vandalAdsRot.y, this.adsProgress),
-      THREE.MathUtils.lerp(this.vandalHipRot.z, this.vandalAdsRot.z, this.adsProgress)
+      THREE.MathUtils.lerp(hipRot.x, adsRot.x, adsEase),
+      THREE.MathUtils.lerp(hipRot.y, adsRot.y, adsEase),
+      THREE.MathUtils.lerp(hipRot.z, adsRot.z, adsEase)
     );
 
-    const adsDamp = 1 - this.adsProgress * 0.72;
-    const bobAmp = (grounded && playerSpeed > 0.6 ? Math.min(1, playerSpeed / 5.5) * 0.01 : 0.0018) * adsDamp;
-    const bobX = Math.cos(t * 9.5) * bobAmp;
-    const bobY = Math.abs(Math.sin(t * 9.5)) * bobAmp * 0.8;
+    // Live SCAR-L reciprocating side charging handle & synced STANAG magazine drop/insert during reload!
+    if (isScar) {
+      if (this.scarBoltCarrier) {
+        const rackPull =
+          this.isReloading && this.reloadProgress > 0.72 && this.reloadProgress < 0.9
+            ? Math.sin(((this.reloadProgress - 0.72) / 0.18) * Math.PI) * 0.055
+            : 0;
+        this.scarBoltCarrier.position.z = -0.055 + Math.max(0, this.kickZ) * 1.1 + rackPull;
+      }
+      if (this.scarMagGroup) {
+        let drop = 0;
+        if (this.isReloading && this.reloadProgress > 0.14 && this.reloadProgress < 0.68) {
+          drop = Math.sin(((this.reloadProgress - 0.14) / 0.54) * Math.PI) * 0.19;
+        }
+        this.scarMagGroup.position.set(
+          this.scarMagRestPos.x,
+          this.scarMagRestPos.y - drop,
+          this.scarMagRestPos.z
+        );
+      }
+    }
 
-    const reloadDip = this.isReloading ? Math.sin(this.reloadProgress * Math.PI) * -0.18 : 0;
-    const equipDip = this.equipTimer > 0 ? -(this.equipTimer / Math.max(0.1, w.equipTime)) * 0.25 : 0;
+    // Silky figure-8 stride & breathing bob driven by smoothed speed (zero jumps when stopping/starting!)
+    this.smoothSpeed = THREE.MathUtils.lerp(this.smoothSpeed, grounded ? playerSpeed : 0, 1 - Math.exp(-10 * dt));
+    const speedNorm = Math.min(1, this.smoothSpeed / 5.5);
+    this.bobPhase += dt * (4.2 + speedNorm * 6.4);
+    this.breathPhase += dt * 1.9;
+
+    const adsDamp = 1 - adsEase * 0.78;
+    const walkBobX = Math.cos(this.bobPhase) * 0.0085 * speedNorm * adsDamp;
+    const walkBobY = Math.sin(this.bobPhase * 2) * 0.0055 * speedNorm * adsDamp;
+    const breathY = Math.sin(this.breathPhase) * 0.0018 * adsDamp;
+
+    // Gentle dip on reload since Armature|Reload already animates the real mag swap + bolt rack!
+    const reloadDip = this.isReloading ? Math.sin(this.reloadProgress * Math.PI) * -0.022 : 0;
+    const equipDip = this.equipTimer > 0 ? -(this.equipTimer / Math.max(0.1, w.equipTime)) * 0.24 : 0;
 
     this.viewmodelRoot.position.set(
-      this.swayX * adsDamp + bobX,
-      this.swayY * adsDamp - bobY + reloadDip + equipDip,
-      this.kickZ * (1 - this.adsProgress * 0.35)
+      this.swayX * adsDamp + walkBobX,
+      this.swayY * adsDamp + walkBobY + breathY + reloadDip + equipDip,
+      this.kickZ * (1 - adsEase * 0.35)
     );
     this.viewmodelRoot.rotation.set(
-      this.kickRotX * (1 - this.adsProgress * 0.45) + reloadDip * 1.4,
-      this.swayX * 1.3 * adsDamp,
-      -this.swayX * 0.9 * adsDamp + (this.isReloading ? -0.35 * Math.sin(this.reloadProgress * Math.PI) : 0)
+      this.kickRotX * (1 - adsEase * 0.45),
+      this.swayX * 1.15 * adsDamp,
+      -this.swayX * 0.9 * adsDamp + walkBobX * 1.8
     );
 
+    // Update tracers
     for (let i = this.tracers.length - 1; i >= 0; i--) {
       const tr = this.tracers[i];
       tr.life -= dt;
@@ -939,6 +1391,7 @@ export class WeaponSystem {
       }
     }
 
+    // Update brass shells
     for (let i = this.shells.length - 1; i >= 0; i--) {
       const sh = this.shells[i];
       sh.life -= dt;
@@ -959,26 +1412,110 @@ export class WeaponSystem {
       }
     }
 
+    // Update sparks & heavy gravity-arcing dark arterial liquid streaks
     for (let i = this.sparks.length - 1; i >= 0; i--) {
       const sp = this.sparks[i];
       sp.life -= dt;
-      sp.vel.y -= 11.2 * dt;
+      sp.vel.y -= (sp.isBlood ? 18.5 : 11.2) * dt;
       sp.mesh.position.addScaledVector(sp.vel, dt);
-      if (sp.mesh.position.y < 0.025) {
-        sp.mesh.position.y = 0.025;
-        sp.vel.y *= -0.45;
-        sp.vel.x *= 0.72;
-        sp.vel.z *= 0.72;
+      if (sp.isBlood && !sp.splattered) {
+        // Align & dynamically stretch flying liquid drops along their real velocity trajectory!
+        const speed = sp.vel.length();
+        if (speed > 0.25) {
+          sp.mesh.lookAt(sp.mesh.position.x + sp.vel.x, sp.mesh.position.y + sp.vel.y, sp.mesh.position.z + sp.vel.z);
+          sp.mesh.scale.z = Math.min(4.2, Math.max(1.2, speed * 0.48));
+        }
+      }
+      if (sp.mesh.position.y < 0.032) {
+        sp.mesh.position.y = 0.032;
+        if (sp.isBlood && !sp.splattered) {
+          sp.splattered = true;
+          if (Math.random() < 0.56) {
+            this.spawnFloorBloodSplatter(sp.mesh.position.x, sp.mesh.position.z, 0.26 + Math.random() * 0.36);
+          }
+          sp.vel.set(0, 0, 0);
+          sp.life = 0;
+        } else {
+          sp.vel.y *= -0.45;
+          sp.vel.x *= 0.72;
+          sp.vel.z *= 0.72;
+        }
       }
       if (sp.life <= 0) {
         this.fxGroup.remove(sp.mesh);
-        (sp.mesh.material as THREE.Material).dispose();
+        if (!sp.isBlood) (sp.mesh.material as THREE.Material).dispose();
         this.sparks.splice(i, 1);
-      } else {
+      } else if (!sp.isBlood) {
         (sp.mesh.material as THREE.MeshBasicMaterial).opacity = Math.min(1, sp.life / sp.maxLife);
       }
     }
 
+    // Update tight brief pressurized arterial mist flash
+    for (let i = this.bloodPuffs.length - 1; i >= 0; i--) {
+      const bp = this.bloodPuffs[i];
+      bp.life -= dt;
+      if (bp.life <= 0) {
+        this.fxGroup.remove(bp.sprite);
+        bp.sprite.material.dispose();
+        this.bloodPuffs.splice(i, 1);
+      } else {
+        const progress = 1 - bp.life / bp.maxLife;
+        bp.sprite.position.addScaledVector(bp.vel, dt * (1 - progress * 0.75));
+        bp.vel.y -= 5.5 * dt;
+        const sc = THREE.MathUtils.lerp(bp.startScale, bp.endScale, progress);
+        bp.sprite.scale.set(sc, sc, 1);
+        bp.sprite.material.opacity = (1 - progress) * (1 - progress) * bp.baseOpacity;
+      }
+    }
+
+    // Update slow, creeping glossy oxblood death floor pools (oozes outward over 3.6s like real blood!)
+    for (let i = this.bloodPools.length - 1; i >= 0; i--) {
+      const pool = this.bloodPools[i];
+      pool.age += dt;
+      pool.life -= dt;
+      const grow = Math.min(1, pool.age / 3.6);
+      const eased = 1 - Math.pow(1 - grow, 2.4);
+      pool.mesh.scale.setScalar(THREE.MathUtils.lerp(0.14, pool.targetScale, eased));
+      if (pool.life <= 0) {
+        this.fxGroup.remove(pool.mesh);
+        (pool.mesh.material as THREE.Material).dispose();
+        this.bloodPools.splice(i, 1);
+      } else if (pool.life < 4) {
+        (pool.mesh.material as THREE.MeshStandardMaterial).opacity = (pool.life / 4) * 0.97;
+      }
+    }
+
+    // Update dropped AKM rifle clatter physics
+    for (let i = this.droppedWeapons.length - 1; i >= 0; i--) {
+      const dw = this.droppedWeapons[i];
+      dw.life -= dt;
+      if (!dw.settled) {
+        dw.vel.y -= 14.5 * dt;
+        dw.group.position.addScaledVector(dw.vel, dt);
+        dw.group.rotation.x += dw.rotVel.x * dt;
+        dw.group.rotation.y += dw.rotVel.y * dt;
+        dw.group.rotation.z += dw.rotVel.z * dt;
+        if (dw.group.position.y <= 0.045) {
+          dw.group.position.y = 0.045;
+          if (Math.abs(dw.vel.y) > 0.9) {
+            dw.vel.y *= -0.32;
+            dw.vel.x *= 0.55;
+            dw.vel.z *= 0.55;
+            dw.rotVel.multiplyScalar(0.45);
+          } else {
+            dw.settled = true;
+            dw.group.rotation.x = 0;
+            dw.group.rotation.z = Math.PI / 2; // Lies flat on its side on the ground!
+          }
+        }
+      }
+      if (dw.life <= 0) {
+        this.fxGroup.remove(dw.group);
+        this.droppedWeapons.splice(i, 1);
+      }
+    }
+
+    // Update frag/flash explosions
     for (let i = this.explosions.length - 1; i >= 0; i--) {
       const ex = this.explosions[i];
       ex.life -= dt;
@@ -1017,6 +1554,7 @@ export class WeaponSystem {
       }
     }
 
+    // Update dynamic pulse lights
     for (let i = this.pulseLights.length - 1; i >= 0; i--) {
       const pl = this.pulseLights[i];
       pl.life -= dt;
@@ -1029,6 +1567,7 @@ export class WeaponSystem {
       }
     }
 
+    // Update decals
     for (let i = this.decals.length - 1; i >= 0; i--) {
       const d = this.decals[i];
       d.life -= dt;
@@ -1059,18 +1598,18 @@ export class WeaponSystem {
 
     const angles = [0.28, Math.PI - 0.28, Math.PI + 0.28, -0.28];
     for (const ang of angles) {
-      const spike = new THREE.Mesh(new THREE.ConeGeometry(0.028, 0.21, 4), outerMat);
+      const spike = new THREE.Mesh(new THREE.ConeGeometry(0.026, 0.2, 4), outerMat);
       spike.rotation.z = ang - Math.PI / 2;
-      spike.position.set(Math.cos(ang) * 0.08, Math.sin(ang) * 0.08, -0.02);
+      spike.position.set(Math.cos(ang) * 0.075, Math.sin(ang) * 0.075, -0.02);
       this.muzzleFlashGroup.add(spike);
     }
 
-    const jet = new THREE.Mesh(new THREE.ConeGeometry(0.038, 0.25, 6), outerMat);
+    const jet = new THREE.Mesh(new THREE.ConeGeometry(0.036, 0.24, 6), outerMat);
     jet.rotation.x = -Math.PI / 2;
     jet.position.z = -0.11;
     this.muzzleFlashGroup.add(jet);
 
-    const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.044, 0), coreMat);
+    const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.042, 0), coreMat);
     this.muzzleFlashGroup.add(core);
 
     if (this.textures?.flashSprite) {
@@ -1083,7 +1622,7 @@ export class WeaponSystem {
         depthWrite: false,
       });
       const flare = new THREE.Sprite(spriteMat);
-      flare.scale.set(0.3, 0.3, 1);
+      flare.scale.set(0.28, 0.28, 1);
       this.muzzleFlashGroup.add(flare);
     }
 
@@ -1094,174 +1633,202 @@ export class WeaponSystem {
   }
 
   /**
-   * Tactical Desert-Tan / Matte-Black Assault Rifle POV with open-window reflex red-dot optic,
-   * winged front iron sight, folded rear BUIS, recessed cyan status LED, sculpted side lever,
-   * curved tan-spined magazine, bare muscular forearm, black fingerless tactical gloves, and C-clamp bare thumb!
+   * Sleek smooth-shaded FN SCAR-L 5.56mm Assault Rifle Viewmodel:
+   * - Iconic Flat Dark Earth (Desert Tan) chamfered monolithic upper receiver + matte gunmetal lower
+   * - Full-length top Picatinny rail + open-window glowing Red-Dot Reflex Sight (centered at y=0.118 for ADS!)
+   * - Perforated monolithic SCAR handguard, side rails, reciprocating side charging handle & flip-up front sight
+   * - Iconic heavy SCAR "UGG-boot" folding stock with adjustable cheek riser
+   * - Fluted matte-black 5.56 barrel, birdcage flash hider, and FDE STANAG curved magazine
+   * Aligned directly to ArmModel's rigged Trigger & Left-Hand grips for seamless two-handed animation!
    */
-  private buildVandalModel(): THREE.Group {
+  private buildScarLModel(): THREE.Group {
     const root = new THREE.Group();
-    root.position.copy(this.vandalHipPos);
-    root.rotation.copy(this.vandalHipRot);
+    const steelTex = buildBrushedGunmetalTexture();
+    const scarFdeTex = buildSharpScarCerakoteTexture();
 
-    const tanBody = new THREE.MeshStandardMaterial({
-      color: 0xe3c380,
-      map: this.textures?.desertTan.map ?? null,
-      roughnessMap: this.textures?.desertTan.roughnessMap ?? null,
-      bumpMap: this.textures?.desertTan.bumpMap ?? null,
-      bumpScale: 0.008,
-      emissive: new THREE.Color(0x4a391b),
-      emissiveIntensity: 0.28,
-      roughness: 0.4,
+    const fdeTan = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      map: scarFdeTex,
+      roughness: 0.38,
       metalness: 0.24,
-      envMapIntensity: 1.35,
-    });
-    const tanTrim = new THREE.MeshStandardMaterial({
-      color: 0xc5a05e,
-      map: this.textures?.desertTan.map ?? null,
-      emissive: new THREE.Color(0x362812),
-      emissiveIntensity: 0.22,
-      roughness: 0.46,
-      metalness: 0.3,
+      emissive: new THREE.Color(0x281e0e),
+      emissiveIntensity: 0.12,
       envMapIntensity: 1.25,
+    });
+    const fdeDark = new THREE.MeshStandardMaterial({
+      color: 0xc2a268,
+      map: scarFdeTex,
+      roughness: 0.46,
+      metalness: 0.28,
+      emissive: new THREE.Color(0x1c140a),
+      emissiveIntensity: 0.1,
+      envMapIntensity: 1.15,
+    });
+    const gunSteel = new THREE.MeshStandardMaterial({
+      color: 0x5c6678,
+      map: steelTex,
+      roughness: 0.3,
+      metalness: 0.8,
+      envMapIntensity: 1.4,
     });
     const matteBlack = new THREE.MeshStandardMaterial({
-      color: 0x1a1e25,
-      emissive: new THREE.Color(0x0b0e12),
-      emissiveIntensity: 0.18,
-      roughness: 0.52,
-      metalness: 0.34,
-      envMapIntensity: 1.25,
+      color: 0x20252e,
+      roughness: 0.56,
+      metalness: 0.26,
+      emissive: new THREE.Color(0x080a0f),
+      emissiveIntensity: 0.14,
     });
-    const gunmetal = new THREE.MeshStandardMaterial({
-      color: 0x3b4350,
-      roughness: 0.3,
-      metalness: 0.82,
-      envMapIntensity: 1.5,
+    const reticleRed = new THREE.MeshBasicMaterial({
+      color: 0xff2e24,
+      transparent: true,
+      opacity: 0.96,
+      depthTest: false,
     });
-    const cyanLed = new THREE.MeshBasicMaterial({ color: 0x56f6ff });
 
-    const makeRoundedRectShape = (w: number, h: number, r: number): THREE.Shape => this.makeRoundedRect(w, h, r);
+    const makeChamferRect = (w: number, h: number, c: number): THREE.Shape => {
+      const hw = w / 2;
+      const hh = h / 2;
+      const s = new THREE.Shape();
+      s.moveTo(-hw + c, -hh);
+      s.lineTo(hw - c, -hh);
+      s.lineTo(hw, -hh + c);
+      s.lineTo(hw, hh - c);
+      s.lineTo(hw - c, hh);
+      s.lineTo(-hw + c, hh);
+      s.lineTo(-hw, hh - c);
+      s.lineTo(-hw, -hh + c);
+      s.closePath();
+      return s;
+    };
 
-    // ===== SCULPTED STOCK WITH BEVELED TAN CHEEK RISER =====
-    const stockFrame = new THREE.Mesh(new THREE.BoxGeometry(0.064, 0.088, 0.42), matteBlack);
-    stockFrame.position.set(0, -0.015, 0.37);
-    root.add(stockFrame);
+    const makeRoundedRect = (w: number, h: number, r: number): THREE.Shape => {
+      const hw = w / 2;
+      const hh = h / 2;
+      const s = new THREE.Shape();
+      s.moveTo(-hw + r, -hh);
+      s.lineTo(hw - r, -hh);
+      s.quadraticCurveTo(hw, -hh, hw, -hh + r);
+      s.lineTo(hw, hh - r);
+      s.quadraticCurveTo(hw, hh, hw - r, hh);
+      s.lineTo(-hw + r, hh);
+      s.quadraticCurveTo(-hw, hh, -hw, hh - r);
+      s.lineTo(-hw, -hh + r);
+      s.quadraticCurveTo(-hw, -hh, -hw + r, -hh);
+      return s;
+    };
 
-    const stockCheek = new THREE.Mesh(new THREE.BoxGeometry(0.072, 0.042, 0.38), tanBody);
-    stockCheek.position.set(0, 0.04, 0.375);
-    stockCheek.rotation.x = -0.045;
-    root.add(stockCheek);
-
-    const stockSidePlate = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.036, 0.34), tanTrim);
-    stockSidePlate.position.set(0, -0.008, 0.385);
-    root.add(stockSidePlate);
-
-    const stockHinge = new THREE.Mesh(new THREE.BoxGeometry(0.078, 0.105, 0.034), matteBlack);
-    stockHinge.position.set(0, 0.005, 0.175);
-    root.add(stockHinge);
-
-    // ===== SCULPTED BEVELED DESERT-TAN RECEIVER & MATTE BLACK LOWER CHASSIS =====
-    const innerCore = new THREE.Mesh(new THREE.BoxGeometry(0.074, 0.112, 0.36), matteBlack);
-    innerCore.position.set(0, -0.008, -0.01);
-    root.add(innerCore);
-
-    // Beveled desert-tan upper receiver shroud
-    const recProfile = makeRoundedRectShape(0.082, 0.062, 0.012);
-    const upperRecGeo = new THREE.ExtrudeGeometry(recProfile, {
-      depth: 0.35,
-      bevelEnabled: true,
-      bevelThickness: 0.006,
-      bevelSize: 0.005,
-      bevelSegments: 2,
-    });
-    upperRecGeo.translate(0, 0, -0.175);
-    const upperRec = new THREE.Mesh(upperRecGeo, tanBody);
-    upperRec.position.set(0, 0.044, -0.005);
-    root.add(upperRec);
-
-    // Rear lower tan trigger housing wrapping back cleanly
-    const lowerRearTan = new THREE.Mesh(new THREE.BoxGeometry(0.084, 0.072, 0.16), tanBody);
-    lowerRearTan.position.set(0, -0.028, 0.085);
-    root.add(lowerRearTan);
-
-    // Recessed dark angular side cutout + signature cyan micro-LED + diagonal charging/bolt lever
-    const sideRecess = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.04, 0.195), matteBlack);
-    sideRecess.position.set(-0.042, 0.012, -0.035);
-    root.add(sideRecess);
-
-    const ledStrip = new THREE.Mesh(new THREE.BoxGeometry(0.009, 0.012, 0.036), cyanLed);
-    ledStrip.position.set(-0.046, -0.012, -0.045);
-    root.add(ledStrip);
-
-    // Diagonal sculpted tan side lever + round pivot boss (iconic detail from reference!)
-    const leverHub = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.019, 0.016, 12), tanTrim);
-    leverHub.rotation.z = Math.PI / 2;
-    leverHub.position.set(-0.047, -0.028, 0.075);
-    root.add(leverHub);
-    const leverHubBolt = new THREE.Mesh(new THREE.CylinderGeometry(0.0075, 0.0075, 0.02, 8), gunmetal);
-    leverHubBolt.rotation.z = Math.PI / 2;
-    leverHubBolt.position.set(-0.048, -0.028, 0.075);
-    root.add(leverHubBolt);
-
-    const leverArm = new THREE.Mesh(new THREE.BoxGeometry(0.013, 0.015, 0.13), tanBody);
-    leverArm.position.set(-0.049, 0.002, 0.022);
-    leverArm.rotation.x = 0.42;
-    root.add(leverArm);
-
-    const frontCheek = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.028, 0.165), tanBody);
-    frontCheek.position.set(0, 0.014, -0.145);
-    root.add(frontCheek);
-
-    // ===== TOP PICATINNY RAIL =====
-    const topRail = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.013, 0.61), matteBlack);
-    topRail.position.set(0, 0.084, -0.14);
-    root.add(topRail);
-    for (let z = 0.15; z >= -0.43; z -= 0.026) {
-      const tooth = new THREE.Mesh(new THREE.BoxGeometry(0.052, 0.008, 0.012), gunmetal);
-      tooth.position.set(0, 0.092, z);
-      root.add(tooth);
-    }
-
-    // ===== COMPACT FOLDED BLACK BACKUP REAR SIGHT (sits cleanly behind the tan reflex optic!) =====
-    const rearBuis = new THREE.Mesh(new THREE.BoxGeometry(0.052, 0.02, 0.062), matteBlack);
-    rearBuis.position.set(0, 0.104, 0.105);
-    root.add(rearBuis);
-    const rearBuisKnurl = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.058, 10), gunmetal);
-    rearBuisKnurl.rotation.z = Math.PI / 2;
-    rearBuisKnurl.position.set(0, 0.108, 0.115);
-    root.add(rearBuisKnurl);
-
-    // ===== HERO SMOOTH ROUNDED OPEN-WINDOW DESERT-TAN REFLEX RED-DOT OPTIC =====
-    const opticZ = -0.022;
-    const opticClamp = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.014, 0.095), matteBlack);
-    opticClamp.position.set(0, 0.102, opticZ);
-    root.add(opticClamp);
-
-    // Sleek beveled desert-tan riser mount block
-    const riserShape = makeRoundedRectShape(0.052, 0.036, 0.006);
-    const riserGeo = new THREE.ExtrudeGeometry(riserShape, {
-      depth: 0.09,
+    // 1. Monolithic FN SCAR-L Chamfered Desert-Tan Upper Receiver & Handguard
+    const upperGeo = new THREE.ExtrudeGeometry(makeChamferRect(0.066, 0.064, 0.012), {
+      depth: 0.52,
       bevelEnabled: true,
       bevelThickness: 0.004,
+      bevelSize: 0.0035,
+      bevelSegments: 2,
+    });
+    upperGeo.translate(0, 0, -0.26);
+    const upper = new THREE.Mesh(upperGeo, fdeTan);
+    upper.position.set(0, 0.024, -0.12);
+    root.add(upper);
+
+    // Side dark cooling vent recesses along forward SCAR handguard
+    for (let i = 0; i < 4; i++) {
+      const slot = new THREE.Mesh(new THREE.BoxGeometry(0.072, 0.011, 0.032), matteBlack);
+      slot.position.set(0, 0.026, -0.21 - i * 0.045);
+      root.add(slot);
+    }
+
+    // Side Picatinny tactical rails on forward handguard
+    for (const sx of [-0.036, 0.036]) {
+      const sideRail = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.016, 0.19), matteBlack);
+      sideRail.position.set(sx, 0.012, -0.285);
+      root.add(sideRail);
+    }
+
+    // 2. Two-Tone Lower Receiver, Flared Magwell, Trigger Guard & Ergonomic Grip
+    const lowerGeo = new THREE.ExtrudeGeometry(makeChamferRect(0.06, 0.048, 0.009), {
+      depth: 0.28,
+      bevelEnabled: true,
+      bevelThickness: 0.003,
       bevelSize: 0.003,
       bevelSegments: 2,
     });
-    riserGeo.translate(0, 0, -0.045);
-    const opticBase = new THREE.Mesh(riserGeo, tanBody);
-    opticBase.position.set(0, 0.126, opticZ);
-    root.add(opticBase);
+    lowerGeo.translate(0, 0, -0.14);
+    const lower = new THREE.Mesh(lowerGeo, fdeDark);
+    lower.position.set(0, -0.022, -0.02);
+    root.add(lower);
 
-    for (const bz of [-0.046, 0.004]) {
-      const bolt = new THREE.Mesh(new THREE.CylinderGeometry(0.0065, 0.0065, 0.062, 8), gunmetal);
-      bolt.rotation.z = Math.PI / 2;
-      bolt.position.set(0, 0.123, bz);
-      root.add(bolt);
+    // Ergonomic matte-black pistol grip aligned to ArmModel right-hand trigger grip
+    const pistolGrip = new THREE.Mesh(new THREE.CapsuleGeometry(0.018, 0.078, 5, 10), matteBlack);
+    pistolGrip.scale.set(0.9, 1, 1.3);
+    pistolGrip.position.set(0, -0.08, 0.065);
+    pistolGrip.rotation.x = 0.28;
+    root.add(pistolGrip);
+
+    // Left-hand underside rail & compact angled foregrip matching ArmModel left-hand grip
+    const underRail = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.012, 0.17), matteBlack);
+    underRail.position.set(0, -0.014, -0.27);
+    root.add(underRail);
+    const afg = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.024, 0.095), matteBlack);
+    afg.position.set(0, -0.028, -0.275);
+    afg.rotation.x = 0.24;
+    root.add(afg);
+
+    // 3. Curved 5.56 STANAG Desert-Tan Magazine (animated cleanly during reload!)
+    const magGroup = new THREE.Group();
+    this.scarMagRestPos.set(0, -0.105, -0.105);
+    magGroup.position.copy(this.scarMagRestPos);
+    magGroup.rotation.x = 0.16;
+    const magUpper = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.14, 0.066), fdeTan);
+    magGroup.add(magUpper);
+    const magBase = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.018, 0.072), matteBlack);
+    magBase.position.set(0, -0.074, 0.002);
+    magGroup.add(magBase);
+    for (const ry of [-0.03, 0.0, 0.03]) {
+      const rib = new THREE.Mesh(new THREE.BoxGeometry(0.039, 0.008, 0.058), fdeDark);
+      rib.position.set(0, ry, 0);
+      magGroup.add(rib);
+    }
+    root.add(magGroup);
+    this.scarMagGroup = magGroup;
+
+    // 4. Reciprocating SCAR Side Charging Handle (left-side iconic SCAR silhouette!)
+    const boltTrack = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.014, 0.14), matteBlack);
+    boltTrack.position.set(-0.033, 0.026, -0.075);
+    root.add(boltTrack);
+
+    const boltGroup = new THREE.Group();
+    boltGroup.position.set(0, 0.026, -0.055);
+    const boltBlock = new THREE.Mesh(new THREE.BoxGeometry(0.072, 0.015, 0.042), gunSteel);
+    boltGroup.add(boltBlock);
+    const handleStem = new THREE.Mesh(new THREE.CylinderGeometry(0.0055, 0.0055, 0.036, 10), gunSteel);
+    handleStem.rotation.z = Math.PI / 2;
+    handleStem.position.set(-0.048, 0, 0);
+    boltGroup.add(handleStem);
+    const handleKnob = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.008, 0.018, 12), matteBlack);
+    handleKnob.rotation.z = Math.PI / 2;
+    handleKnob.position.set(-0.064, 0, 0);
+    boltGroup.add(handleKnob);
+    root.add(boltGroup);
+    this.scarBoltCarrier = boltGroup;
+
+    // 5. Full-Length Machined Top Picatinny Rail
+    const topRail = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.01, 0.52), matteBlack);
+    topRail.position.set(0, 0.062, -0.12);
+    root.add(topRail);
+    for (let z = 0.12; z >= -0.36; z -= 0.024) {
+      const tooth = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.006, 0.01), gunSteel);
+      tooth.position.set(0, 0.069, z);
+      root.add(tooth);
     }
 
-    // Smooth curved rounded-arch open reflex optic hood (ExtrudeGeometry with window hole -> zero blocky corners!)
-    const opticCenterY = 0.172;
-    const hoodOuter = makeRoundedRectShape(0.064, 0.058, 0.015);
-    const hoodHole = makeRoundedRectShape(0.05, 0.044, 0.011);
+    // 6. Open-Window Holographic Red-Dot Reflex Sight (lens dead-center at y = 0.118 for pinpoint ADS!)
+    const opticZ = -0.02;
+    const opticMount = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.018, 0.088), matteBlack);
+    opticMount.position.set(0, 0.08, opticZ);
+    root.add(opticMount);
+
+    const hoodOuter = makeRoundedRect(0.056, 0.048, 0.012);
+    const hoodHole = makeRoundedRect(0.044, 0.036, 0.009);
     hoodOuter.holes.push(hoodHole);
     const hoodGeo = new THREE.ExtrudeGeometry(hoodOuter, {
       depth: 0.034,
@@ -1271,141 +1838,89 @@ export class WeaponSystem {
       bevelSegments: 2,
     });
     hoodGeo.translate(0, 0, -0.017);
-    const opticHood = new THREE.Mesh(hoodGeo, tanBody);
-    opticHood.position.set(0, opticCenterY, opticZ - 0.018);
+    const opticHood = new THREE.Mesh(hoodGeo, fdeTan);
+    opticHood.position.set(0, 0.118, opticZ - 0.008);
     root.add(opticHood);
 
-    // Subtle dark inner anti-glare bezel ring inside the optic hood
-    const innerOuter = makeRoundedRectShape(0.051, 0.045, 0.011);
-    const innerHole = makeRoundedRectShape(0.046, 0.04, 0.009);
-    innerOuter.holes.push(innerHole);
-    const innerBezelGeo = new THREE.ExtrudeGeometry(innerOuter, { depth: 0.03, bevelEnabled: false });
-    innerBezelGeo.translate(0, 0, -0.015);
-    const innerBezel = new THREE.Mesh(innerBezelGeo, matteBlack);
-    innerBezel.position.set(0, opticCenterY, opticZ - 0.018);
-    root.add(innerBezel);
-
-    // Crisp anti-reflective subtly green-tinted clear glass pane + glowing crimson red-dot reticle!
-    const reflexGlass = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.046, 0.04),
+    const opticGlass = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.043, 0.035),
       new THREE.MeshBasicMaterial({
-        color: 0x6dffaa,
+        color: 0x62ffd8,
         transparent: true,
-        opacity: 0.14,
+        opacity: 0.12,
         depthWrite: false,
         side: THREE.DoubleSide,
       })
     );
-    reflexGlass.position.set(0, opticCenterY, opticZ - 0.018);
-    root.add(reflexGlass);
+    opticGlass.position.set(0, 0.118, opticZ - 0.008);
+    root.add(opticGlass);
 
-    const reflexDot = new THREE.Mesh(
-      new THREE.CircleGeometry(0.0026, 12),
-      new THREE.MeshBasicMaterial({
-        color: 0xff3b1f,
-        transparent: true,
-        opacity: 0.96,
-        depthTest: false,
-      })
-    );
-    reflexDot.position.set(0, 0.168, opticZ - 0.016);
-    root.add(reflexDot);
-
-    // ===== FORWARD VENTED HANDGUARD, RIBBED RAIL & WINGED FRONT IRON SIGHT =====
-    const handguardCore = new THREE.Mesh(new THREE.BoxGeometry(0.068, 0.068, 0.31), matteBlack);
-    handguardCore.position.set(0, 0.008, -0.32);
-    root.add(handguardCore);
-
-    for (let z = -0.2; z >= -0.43; z -= 0.024) {
-      const rib = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.016, 0.012), matteBlack);
-      rib.position.set(0, 0.01, z);
-      root.add(rib);
+    // Crisp glowing crimson dot + subtle outer bracket ticks
+    const redDot = new THREE.Mesh(new THREE.CircleGeometry(0.0019, 12), reticleRed);
+    redDot.position.set(0, 0.118, opticZ - 0.006);
+    root.add(redDot);
+    for (const [tx, ty, tw, th] of [
+      [0, 0.0075, 0.0009, 0.0038],
+      [0, -0.0075, 0.0009, 0.0038],
+      [-0.0075, 0, 0.0038, 0.0009],
+      [0.0075, 0, 0.0038, 0.0009],
+    ]) {
+      const tick = new THREE.Mesh(new THREE.PlaneGeometry(tw, th), reticleRed);
+      tick.position.set(tx, 0.118 + ty, opticZ - 0.006);
+      root.add(tick);
     }
 
-    // Beveled desert-tan upper handguard shroud with dark cooling vents
-    const hgProfile = makeRoundedRectShape(0.076, 0.04, 0.009);
-    const hgGeo = new THREE.ExtrudeGeometry(hgProfile, {
-      depth: 0.26,
+    // 7. Signature Heavy FN SCAR-L Folding "UGG-Boot" Buttstock & Cheek Riser
+    const hinge = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.072, 0.032), gunSteel);
+    hinge.position.set(0, 0.012, 0.145);
+    root.add(hinge);
+
+    const stockShape = new THREE.Shape();
+    stockShape.moveTo(0.0, 0.044);
+    stockShape.lineTo(0.28, 0.032);
+    stockShape.lineTo(0.28, -0.068);
+    stockShape.lineTo(0.18, -0.066);
+    stockShape.lineTo(0.14, -0.034);
+    stockShape.lineTo(0.0, -0.03);
+    stockShape.closePath();
+    const stockGeo = new THREE.ExtrudeGeometry(stockShape, {
+      depth: 0.044,
       bevelEnabled: true,
       bevelThickness: 0.005,
       bevelSize: 0.004,
       bevelSegments: 2,
     });
-    hgGeo.translate(0, 0, -0.13);
-    const hgTanTop = new THREE.Mesh(hgGeo, tanBody);
-    hgTanTop.position.set(0, 0.052, -0.315);
-    root.add(hgTanTop);
+    stockGeo.translate(0, 0, -0.022);
+    stockGeo.rotateY(-Math.PI / 2); // +X becomes +Z rear!
+    const stockMesh = new THREE.Mesh(stockGeo, fdeTan);
+    stockMesh.position.set(0, 0.005, 0.155);
+    root.add(stockMesh);
 
-    for (let i = 0; i < 4; i++) {
-      const slot = new THREE.Mesh(new THREE.BoxGeometry(0.084, 0.011, 0.025), matteBlack);
-      slot.position.set(0, 0.052, -0.22 - i * 0.054);
-      root.add(slot);
-    }
+    const cheekPad = new THREE.Mesh(new THREE.CapsuleGeometry(0.02, 0.16, 4, 8), fdeDark);
+    cheekPad.rotation.x = Math.PI / 2;
+    cheekPad.position.set(0, 0.048, 0.27);
+    root.add(cheekPad);
 
-    // Iconic Tall Winged Matte-Black Front Iron Sight Post (protective U-ears + thin front blade!)
-    const fsBase = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.02, 0.032), matteBlack);
-    fsBase.position.set(0, 0.096, -0.455);
-    root.add(fsBase);
-
-    for (const sx of [-1, 1]) {
-      const wingLow = new THREE.Mesh(new THREE.BoxGeometry(0.0055, 0.034, 0.014), matteBlack);
-      wingLow.position.set(sx * 0.015, 0.12, -0.455);
-      wingLow.rotation.z = sx * -0.24;
-      root.add(wingLow);
-
-      const wingTip = new THREE.Mesh(new THREE.BoxGeometry(0.005, 0.022, 0.012), matteBlack);
-      wingTip.position.set(sx * 0.017, 0.142, -0.455);
-      wingTip.rotation.z = sx * 0.34;
-      root.add(wingTip);
-    }
-    const fsPin = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.032, 0.005), gunmetal);
-    fsPin.position.set(0, 0.122, -0.455);
-    root.add(fsPin);
-
-    // Compact gunmetal barrel & tactical compensator muzzle
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.015, 0.15, 10), gunmetal);
+    // 8. Fluted Matte-Black 5.56 Barrel, Gas Block Flip-Up Front Sight & Birdcage Flash Hider
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.0115, 0.0125, 0.22, 12), gunSteel);
     barrel.rotation.x = Math.PI / 2;
-    barrel.position.set(0, 0.036, -0.5);
+    barrel.position.set(0, 0.024, -0.47);
     root.add(barrel);
 
-    const comp = new THREE.Mesh(new THREE.CylinderGeometry(0.019, 0.018, 0.062, 8), matteBlack);
-    comp.rotation.x = Math.PI / 2;
-    comp.position.set(0, 0.036, -0.555);
-    root.add(comp);
+    const gasBlock = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.038, 0.038), gunSteel);
+    gasBlock.position.set(0, 0.034, -0.42);
+    root.add(gasBlock);
 
-    // ===== CURVED MAG (matte black sides + desert-tan front edge spine) & PISTOL GRIP =====
-    const magBody = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.24, 0.078), matteBlack);
-    magBody.position.set(0, -0.142, -0.12);
-    magBody.rotation.x = 0.2;
-    root.add(magBody);
+    // Signature SCAR front iron sight tower
+    const fsPost = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.034, 0.014), matteBlack);
+    fsPost.position.set(0, 0.068, -0.42);
+    root.add(fsPost);
 
-    const magTanSpine = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.23, 0.022), tanBody);
-    magTanSpine.position.set(0, -0.145, -0.157);
-    magTanSpine.rotation.x = 0.2;
-    root.add(magTanSpine);
+    const flashHider = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.015, 0.056, 10), matteBlack);
+    flashHider.rotation.x = Math.PI / 2;
+    flashHider.position.set(0, 0.024, -0.578);
+    root.add(flashHider);
 
-    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.15, 0.066), matteBlack);
-    grip.position.set(0, -0.122, 0.105);
-    grip.rotation.x = -0.26;
-    root.add(grip);
-
-    // Hands & arms are loaded via GLTFLoader from /models/fps_arms.glb (no procedural hands!)
     return root;
-  }
-
-  private makeRoundedRect(w: number, h: number, r: number): THREE.Shape {
-    const hw = w / 2;
-    const hh = h / 2;
-    const s = new THREE.Shape();
-    s.moveTo(-hw + r, -hh);
-    s.lineTo(hw - r, -hh);
-    s.quadraticCurveTo(hw, -hh, hw, -hh + r);
-    s.lineTo(hw, hh - r);
-    s.quadraticCurveTo(hw, hh, hw - r, hh);
-    s.lineTo(-hw + r, hh);
-    s.quadraticCurveTo(-hw, hh, -hw, hh - r);
-    s.lineTo(-hw, -hh + r);
-    s.quadraticCurveTo(-hw, -hh, -hw + r, -hh);
-    return s;
   }
 }

@@ -1,4 +1,20 @@
+import * as THREE from 'three';
 import { Team, WeaponDef } from '../types';
+
+export interface NameplateTarget {
+  id: string;
+  name: string;
+  hpRatio: number;
+  headWorld: THREE.Vector3;
+}
+
+export interface DamageHistoryEntry {
+  attacker: string;
+  totalDamage: number;
+  hits: number;
+  weapon: string;
+  isKiller?: boolean;
+}
 
 interface DamageArc {
   angle: number; // radians relative to player forward
@@ -48,6 +64,11 @@ export class HUD {
   private elAbCCharges = document.getElementById('ab-c-charges')!;
   private elAbQCharges = document.getElementById('ab-q-charges')!;
   private elAbECharges = document.getElementById('ab-e-charges')!;
+  private elNameplates = document.getElementById('nameplates-layer')!;
+  private elDamageHistory = document.getElementById('damage-history')!;
+  private elDamageHistoryList = document.getElementById('dh-list')!;
+  private nameplateEls = new Map<string, { root: HTMLDivElement; hpFill: HTMLDivElement }>();
+  private projVec = new THREE.Vector3();
 
   private hitmarkerTimer = 0;
   private bannerTimer = 0;
@@ -189,6 +210,7 @@ export class HUD {
       this.elWepName.textContent = weapon.name;
       this.elFireMode.textContent = weapon.fireMode;
       document.getElementById('wslot-0')?.classList.toggle('active', slotIndex === 0);
+      document.getElementById('wslot-1')?.classList.toggle('active', slotIndex === 1);
       this.lastMag = -99;
       this.lastRes = -99;
     }
@@ -211,17 +233,17 @@ export class HUD {
     }
   }
 
-  public updateAbilities(charges: { stim: number; flash: number; smoke: number }, stimActive: boolean): void {
-    const key = `${charges.stim}:${charges.flash}:${charges.smoke}:${stimActive}`;
+  public updateAbilities(charges: { frag: number; flash: number; smoke: number }): void {
+    const key = `${charges.frag}:${charges.flash}:${charges.smoke}`;
     if (key === this.lastAbKey) return;
     this.lastAbKey = key;
 
-    this.elAbC.classList.toggle('depleted', charges.stim <= 0 && !stimActive);
-    this.elAbC.classList.toggle('active-fx', stimActive);
+    this.elAbC.classList.toggle('depleted', charges.frag <= 0);
+    this.elAbC.classList.remove('active-fx');
     this.elAbQ.classList.toggle('depleted', charges.flash <= 0);
     this.elAbE.classList.toggle('depleted', charges.smoke <= 0);
 
-    this.elAbCCharges.textContent = '●'.repeat(charges.stim) || '○';
+    this.elAbCCharges.textContent = '●'.repeat(charges.frag) || '○';
     this.elAbQCharges.textContent = '●'.repeat(charges.flash) || '○';
     this.elAbECharges.textContent = '●'.repeat(charges.smoke) || '○';
   }
@@ -272,6 +294,78 @@ export class HUD {
 
   public updateFps(fps: number): void {
     this.elPerf.textContent = `${Math.round(fps)} FPS`;
+  }
+
+  /**
+   * Cryzen.io-style floating cyan teammate nameplates projected cleanly into 2D screen space (visible through walls!)
+   */
+  public updateNameplates(targets: NameplateTarget[], camera: THREE.PerspectiveCamera): void {
+    const activeIds = new Set<string>();
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+
+    for (const t of targets) {
+      activeIds.add(t.id);
+      let entry = this.nameplateEls.get(t.id);
+      if (!entry) {
+        const root = document.createElement('div');
+        root.className = 'ally-nameplate';
+        const tag = document.createElement('div');
+        tag.className = 'ally-nameplate-tag';
+        tag.textContent = t.name;
+        const hpWrap = document.createElement('div');
+        hpWrap.className = 'ally-nameplate-hp';
+        const hpFill = document.createElement('div');
+        hpFill.className = 'ally-nameplate-hp-fill';
+        hpWrap.appendChild(hpFill);
+        root.appendChild(tag);
+        root.appendChild(hpWrap);
+        this.elNameplates.appendChild(root);
+        entry = { root, hpFill };
+        this.nameplateEls.set(t.id, entry);
+      }
+
+      this.projVec.copy(t.headWorld).project(camera);
+      // Hide if behind camera or far offscreen
+      if (this.projVec.z > 1 || this.projVec.x < -1.15 || this.projVec.x > 1.15 || this.projVec.y < -1.15 || this.projVec.y > 1.15) {
+        entry.root.style.display = 'none';
+      } else {
+        const sx = (this.projVec.x * 0.5 + 0.5) * w;
+        const sy = (-this.projVec.y * 0.5 + 0.5) * h;
+        entry.root.style.display = 'flex';
+        entry.root.style.transform = `translate(${sx.toFixed(1)}px, ${sy.toFixed(1)}px) translate(-50%, -100%)`;
+        entry.hpFill.style.width = `${Math.round(THREE.MathUtils.clamp(t.hpRatio, 0, 1) * 100)}%`;
+      }
+    }
+
+    for (const [id, entry] of this.nameplateEls) {
+      if (!activeIds.has(id)) {
+        entry.root.remove();
+        this.nameplateEls.delete(id);
+      }
+    }
+  }
+
+  public showDamageHistory(entries: DamageHistoryEntry[]): void {
+    if (entries.length === 0) {
+      this.hideDamageHistory();
+      return;
+    }
+    this.elDamageHistoryList.innerHTML = entries
+      .map(
+        (e) => `
+        <div class="dh-row">
+          <span class="dh-attacker">${e.isKiller ? '☠ ' : ''}${e.attacker}</span>
+          <span class="dh-meta">${Math.round(e.totalDamage)} DMG <span class="dh-hits">(${e.hits} ${e.hits === 1 ? 'hit' : 'hits'})</span></span>
+        </div>
+      `
+      )
+      .join('');
+    this.elDamageHistory.classList.remove('hidden');
+  }
+
+  public hideDamageHistory(): void {
+    this.elDamageHistory.classList.add('hidden');
   }
 
   public tick(dt: number, lowHp: boolean): void {

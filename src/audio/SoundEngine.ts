@@ -118,6 +118,66 @@ export class SoundEngine {
     tail.stop(now + 0.36);
   }
 
+  /**
+   * Crisp high-velocity 5.56mm SCAR-L gunshot with tighter supersonic snap & sharp mechanical bolt clack.
+   */
+  public playScarShot(distanceAttenuation = 1): void {
+    if (!this.ctx || !this.masterGain || !this.noiseBuffer) return;
+    const now = this.ctx.currentTime;
+    const vol = Math.max(0.05, Math.min(1, distanceAttenuation));
+
+    // 1. Tight 5.56 chamber punch (higher & faster decay than 7.62 AKM)
+    const osc = this.ctx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(220, now);
+    osc.frequency.exponentialRampToValueAtTime(52, now + 0.068);
+
+    const oscFilter = this.ctx.createBiquadFilter();
+    oscFilter.type = 'lowpass';
+    oscFilter.frequency.value = 620;
+
+    const oscGain = this.ctx.createGain();
+    oscGain.gain.setValueAtTime(0.48 * vol, now);
+    oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.085);
+    osc.connect(oscFilter);
+    oscFilter.connect(oscGain);
+    oscGain.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.095);
+
+    // 2. Razor-crisp supersonic 5.56 muzzle crack
+    const crack = this.ctx.createBufferSource();
+    crack.buffer = this.noiseBuffer;
+    const crackFilter = this.ctx.createBiquadFilter();
+    crackFilter.type = 'bandpass';
+    crackFilter.frequency.setValueAtTime(2650, now);
+    crackFilter.frequency.exponentialRampToValueAtTime(980, now + 0.065);
+    crackFilter.Q.value = 1.35;
+
+    const crackGain = this.ctx.createGain();
+    crackGain.gain.setValueAtTime(0.76 * vol, now);
+    crackGain.gain.exponentialRampToValueAtTime(0.001, now + 0.11);
+    crack.connect(crackFilter);
+    crackFilter.connect(crackGain);
+    crackGain.connect(this.masterGain);
+    crack.start(now);
+    crack.stop(now + 0.12);
+
+    // 3. Subtle metallic SCAR reciprocating bolt clack
+    const bolt = this.ctx.createOscillator();
+    bolt.type = 'triangle';
+    bolt.frequency.setValueAtTime(1420, now + 0.014);
+    bolt.frequency.exponentialRampToValueAtTime(420, now + 0.045);
+    const boltGain = this.ctx.createGain();
+    boltGain.gain.setValueAtTime(0.001, now);
+    boltGain.gain.linearRampToValueAtTime(0.14 * vol, now + 0.016);
+    boltGain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+    bolt.connect(boltGain);
+    boltGain.connect(this.masterGain);
+    bolt.start(now);
+    bolt.stop(now + 0.055);
+  }
+
   public playGhostShot(): void {
     if (!this.ctx || !this.masterGain || !this.noiseBuffer) return;
     const now = this.ctx.currentTime;
@@ -376,22 +436,113 @@ export class SoundEngine {
     src.stop(now + 0.68);
   }
 
-  public playStimActivate(): void {
+  public playGrenadeThrow(): void {
+    if (!this.ctx || !this.masterGain || !this.noiseBuffer) return;
+    const now = this.ctx.currentTime;
+
+    // Metallic pin pull click
+    const pin = this.ctx.createOscillator();
+    pin.type = 'triangle';
+    pin.frequency.setValueAtTime(1950, now);
+    pin.frequency.exponentialRampToValueAtTime(980, now + 0.035);
+    const pinGain = this.ctx.createGain();
+    pinGain.gain.setValueAtTime(0.16, now);
+    pinGain.gain.exponentialRampToValueAtTime(0.001, now + 0.045);
+    pin.connect(pinGain);
+    pinGain.connect(this.masterGain);
+    pin.start(now);
+    pin.stop(now + 0.05);
+
+    // Snappy underhand/overhand throw whoosh
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    const bp = this.ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(1400, now + 0.03);
+    bp.frequency.exponentialRampToValueAtTime(380, now + 0.19);
+    bp.Q.value = 1.6;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.001, now + 0.03);
+    g.gain.linearRampToValueAtTime(0.24, now + 0.08);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+    src.connect(bp);
+    bp.connect(g);
+    g.connect(this.masterGain);
+    src.start(now + 0.03);
+    src.stop(now + 0.24);
+  }
+
+  public playGrenadeBounce(strength = 1): void {
     if (!this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;
-    [330, 440, 660].forEach((freq, i) => {
+    const vol = Math.max(0.04, Math.min(1, strength));
+    const freqs = [1180 + Math.random() * 180, 2140 + Math.random() * 240];
+    freqs.forEach((f, i) => {
       if (!this.ctx || !this.masterGain) return;
       const osc = this.ctx.createOscillator();
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(freq, now + i * 0.055);
+      osc.type = i === 0 ? 'triangle' : 'sine';
+      osc.frequency.setValueAtTime(f, now);
+      osc.frequency.exponentialRampToValueAtTime(f * 0.72, now + 0.055);
       const g = this.ctx.createGain();
-      g.gain.setValueAtTime(0.18, now + i * 0.055);
-      g.gain.exponentialRampToValueAtTime(0.001, now + i * 0.055 + 0.28);
+      g.gain.setValueAtTime((i === 0 ? 0.16 : 0.09) * vol, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.065);
       osc.connect(g);
       g.connect(this.masterGain);
-      osc.start(now + i * 0.055);
-      osc.stop(now + i * 0.055 + 0.3);
+      osc.start(now);
+      osc.stop(now + 0.07);
     });
+  }
+
+  public playFragExplosion(distanceAttenuation = 1): void {
+    if (!this.ctx || !this.masterGain || !this.noiseBuffer) return;
+    const now = this.ctx.currentTime;
+    const vol = Math.max(0.15, Math.min(1, distanceAttenuation));
+
+    // 1. Massive sub-bass concussion drop
+    const sub = this.ctx.createOscillator();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(115, now);
+    sub.frequency.exponentialRampToValueAtTime(24, now + 0.55);
+    const subGain = this.ctx.createGain();
+    subGain.gain.setValueAtTime(0.95 * vol, now);
+    subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.72);
+    sub.connect(subGain);
+    subGain.connect(this.masterGain);
+    sub.start(now);
+    sub.stop(now + 0.75);
+
+    // 2. Initial sharp shrapnel crack
+    const crack = this.ctx.createBufferSource();
+    crack.buffer = this.noiseBuffer;
+    const hp = this.ctx.createBiquadFilter();
+    hp.type = 'bandpass';
+    hp.frequency.setValueAtTime(2200, now);
+    hp.frequency.exponentialRampToValueAtTime(420, now + 0.22);
+    hp.Q.value = 0.7;
+    const crackGain = this.ctx.createGain();
+    crackGain.gain.setValueAtTime(0.75 * vol, now);
+    crackGain.gain.exponentialRampToValueAtTime(0.001, now + 0.26);
+    crack.connect(hp);
+    hp.connect(crackGain);
+    crackGain.connect(this.masterGain);
+    crack.start(now);
+    crack.stop(now + 0.28);
+
+    // 3. Roaring low-passed explosion body & industrial foundry echo tail
+    const roar = this.ctx.createBufferSource();
+    roar.buffer = this.noiseBuffer;
+    const lp = this.ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(980, now);
+    lp.frequency.exponentialRampToValueAtTime(140, now + 1.1);
+    const roarGain = this.ctx.createGain();
+    roarGain.gain.setValueAtTime(0.88 * vol, now);
+    roarGain.gain.exponentialRampToValueAtTime(0.001, now + 1.25);
+    roar.connect(lp);
+    lp.connect(roarGain);
+    roarGain.connect(this.masterGain);
+    roar.start(now);
+    roar.stop(now + 1.3);
   }
 
   public playRoundHorn(victory: boolean): void {
