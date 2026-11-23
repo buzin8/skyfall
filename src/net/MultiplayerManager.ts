@@ -201,7 +201,7 @@ export interface MultiplayerCallbacks {
 }
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-const PEER_PREFIX = 'sunfire-tdm-';
+const PEER_PREFIX = 'skyfall-tdm-';
 
 const ICE_CONFIG: RTCConfiguration = {
   iceCandidatePoolSize: 8,
@@ -656,7 +656,7 @@ export class MultiplayerManager {
 
   private openBroadcastChannel(code: string): void {
     if (typeof BroadcastChannel === 'undefined') return;
-    const bc = new BroadcastChannel(`sunfire-tdm-${code}`);
+    const bc = new BroadcastChannel(`skyfall-tdm-${code}`);
     this.bc = bc;
     bc.onmessage = (ev) => {
       const env = ev.data as LocalEnvelope | undefined;

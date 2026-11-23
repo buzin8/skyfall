@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { AABB, ZoneDef } from '../types';
+import { AABB, RampCollider, ZoneDef } from '../types';
 import { SoundEngine } from '../audio/SoundEngine';
 
 const STAND_EYE_HEIGHT = 1.66;
@@ -31,9 +31,10 @@ export class PlayerController {
   // Stim boost state
   public stimTimer = 0;
 
-  // Camera punch / screen shake
+  // Camera punch / screen shake & silky stair vertical smoothing
   private shakeIntensity = 0;
   private stepAccum = 0;
+  private smoothPosY = 0;
 
   // Input flags
   private keys = new Set<string>();
@@ -43,6 +44,7 @@ export class PlayerController {
 
   public reset(spawnPos: THREE.Vector3, spawnYaw: number): void {
     this.pos.copy(spawnPos);
+    this.smoothPosY = spawnPos.y;
     this.vel.set(0, 0, 0);
     this.yaw = spawnYaw;
     this.pitch = 0;
@@ -131,7 +133,8 @@ export class PlayerController {
     weaponSpeedMult: number,
     recoilPitchOffset: number,
     recoilYawOffset: number,
-    mapBounds?: { minX: number; maxX: number; minZ: number; maxZ: number }
+    mapBounds?: { minX: number; maxX: number; minZ: number; maxZ: number },
+    ramps?: RampCollider[]
   ): void {
     if (this.stimTimer > 0) {
       this.stimTimer = Math.max(0, this.stimTimer - dt);
@@ -210,9 +213,9 @@ export class PlayerController {
     // Gravity
     this.vel.y -= GRAVITY * dt;
 
-    // Integrate + resolve AABB collisions cleanly per axis with multi-pass depenetration (zero wall clipping!)
+    // Integrate + resolve AABB & smooth stair ramp collisions cleanly per axis (zero wall clipping or stair snag!)
     const bodyHeight = this.crouching ? CROUCH_HEIGHT : STAND_HEIGHT;
-    this.moveAndCollide(dt, colliders, bodyHeight, mapBounds);
+    this.moveAndCollide(dt, colliders, bodyHeight, mapBounds, ramps);
 
     this.horizontalSpeed = Math.hypot(this.vel.x, this.vel.z);
 
@@ -233,13 +236,24 @@ export class PlayerController {
     const sx = (Math.random() - 0.5) * this.shakeIntensity;
     const sy = (Math.random() - 0.5) * this.shakeIntensity;
 
-    // Subtle walk headbob
+    // Smooth camera Y tracking (eliminates any stair/curb micro-jolt while keeping jumps instant!)
+    const dyCam = Math.abs(this.pos.y - this.smoothPosY);
+    if (dyCam > 0.8) {
+      this.smoothPosY = this.pos.y;
+    } else {
+      const rate = this.grounded ? 34 : 52;
+      this.smoothPosY = THREE.MathUtils.lerp(this.smoothPosY, this.pos.y, Math.min(1, dt * rate));
+    }
+
+    // Subtle walk headbob (calmer on stairs so climbing feels silky-smooth & easy to aim!)
+    const onRamp = this.sampleRampHeight(this.pos.x, this.pos.z, this.pos.y, ramps) !== null;
+    const bobScale = onRamp ? 0.35 : 1.0;
     const bob =
       this.grounded && this.horizontalSpeed > 0.6
-        ? Math.sin(performance.now() * 0.0115) * (this.walking ? 0.012 : 0.028)
+        ? Math.sin(performance.now() * 0.0115) * (this.walking ? 0.012 : 0.028) * bobScale
         : 0;
 
-    camera.position.set(this.pos.x, this.pos.y + this.eyeHeight + bob, this.pos.z);
+    camera.position.set(this.pos.x, this.smoothPosY + this.eyeHeight + bob, this.pos.z);
     camera.rotation.order = 'YXZ';
     camera.rotation.set(
       Math.max(-1.48, Math.min(1.48, this.pitch + recoilPitchOffset + sy)),
@@ -248,23 +262,54 @@ export class PlayerController {
     );
   }
 
+  private sampleRampHeight(x: number, z: number, curY: number, ramps?: RampCollider[]): number | null {
+    if (!ramps || ramps.length === 0) return null;
+    let bestY: number | null = null;
+    for (const r of ramps) {
+      if (x + PLAYER_RADIUS * 0.6 < r.minX || x - PLAYER_RADIUS * 0.6 > r.maxX) continue;
+      // Extend the high-end plateau smoothly across the flat top landing so there is zero slab-edge seam!
+      const minPad = r.yAtMinZ > r.yAtMaxZ ? 0.74 : 0.24;
+      const maxPad = r.yAtMaxZ > r.yAtMinZ ? 0.74 : 0.24;
+      if (z < r.minZ - minPad || z > r.maxZ + maxPad) continue;
+      const t = THREE.MathUtils.clamp((z - r.minZ) / Math.max(0.001, r.maxZ - r.minZ), 0, 1);
+      const ry = THREE.MathUtils.lerp(r.yAtMinZ, r.yAtMaxZ, t);
+      // Only engage top of ramp if player is on or near the ramp surface (never teleport up from underneath!)
+      if (curY >= ry - 0.85 && (bestY === null || ry > bestY)) {
+        bestY = ry;
+      }
+    }
+    return bestY;
+  }
+
   private moveAndCollide(
     dt: number,
     colliders: AABB[],
     bodyHeight: number,
-    mapBounds?: { minX: number; maxX: number; minZ: number; maxZ: number }
+    mapBounds?: { minX: number; maxX: number; minZ: number; maxZ: number },
+    ramps?: RampCollider[]
   ): void {
-    // 1. Move X (use original step direction so zeroing vel.x never skips later overlapping colliders!)
+    const wasGrounded = this.grounded;
+    const prevZ = this.pos.z;
+    const prevX = this.pos.x;
+
+    // 1. Move X
     const stepX = this.vel.x * dt;
     this.pos.x += stepX;
+    // Pre-lift smoothly along any staircase ramp BEFORE checking solid colliders!
+    if (this.vel.y <= 0) {
+      const preRampX = this.sampleRampHeight(this.pos.x, this.pos.z, this.pos.y, ramps);
+      if (preRampX !== null && this.pos.y < preRampX) {
+        this.pos.y = preRampX;
+      }
+    }
     for (const box of colliders) {
       if (!this.overlaps(box, bodyHeight)) continue;
       const stepDelta = box.maxY - this.pos.y;
       const boxHeight = box.maxY - box.minY;
       if (
-        this.grounded &&
+        wasGrounded &&
         stepDelta > 0 &&
-        stepDelta <= 0.45 &&
+        stepDelta <= 0.48 &&
         boxHeight <= 0.65 &&
         !this.collidesAtY(box.maxY + 0.01, colliders, bodyHeight)
       ) {
@@ -285,14 +330,20 @@ export class PlayerController {
     // 2. Move Z
     const stepZ = this.vel.z * dt;
     this.pos.z += stepZ;
+    if (this.vel.y <= 0) {
+      const preRampZ = this.sampleRampHeight(this.pos.x, this.pos.z, this.pos.y, ramps);
+      if (preRampZ !== null && this.pos.y < preRampZ) {
+        this.pos.y = preRampZ;
+      }
+    }
     for (const box of colliders) {
       if (!this.overlaps(box, bodyHeight)) continue;
       const stepDelta = box.maxY - this.pos.y;
       const boxHeight = box.maxY - box.minY;
       if (
-        this.grounded &&
+        wasGrounded &&
         stepDelta > 0 &&
-        stepDelta <= 0.45 &&
+        stepDelta <= 0.48 &&
         boxHeight <= 0.65 &&
         !this.collidesAtY(box.maxY + 0.01, colliders, bodyHeight)
       ) {
@@ -310,7 +361,27 @@ export class PlayerController {
       }
     }
 
-    // 3. Move Y (only resolve vertical contact on boxes we solidly overlap horizontally -> never snap onto walls!)
+    // Prevent clipping head into the low underside of staircases when walking underneath from ground level
+    if (ramps) {
+      for (const r of ramps) {
+        if (this.pos.x + PLAYER_RADIUS < r.minX || this.pos.x - PLAYER_RADIUS > r.maxX) continue;
+        if (this.pos.z + PLAYER_RADIUS < r.minZ || this.pos.z - PLAYER_RADIUS > r.maxZ) continue;
+        const t = THREE.MathUtils.clamp((this.pos.z - r.minZ) / Math.max(0.001, r.maxZ - r.minZ), 0, 1);
+        const ry = THREE.MathUtils.lerp(r.yAtMinZ, r.yAtMaxZ, t);
+        if (this.pos.y < ry - 0.85 && this.pos.y + bodyHeight > ry - 0.24) {
+          // Slide cleanly rather than locking both axes
+          if (Math.abs(this.pos.z - prevZ) >= Math.abs(this.pos.x - prevX)) {
+            this.pos.z = prevZ;
+            this.vel.z = 0;
+          } else {
+            this.pos.x = prevX;
+            this.vel.x = 0;
+          }
+        }
+      }
+    }
+
+    // 3. Move Y (resolve solid floors FIRST, then silky-smooth continuous stair ramp riding!)
     const stepY = this.vel.y * dt;
     this.pos.y += stepY;
     this.grounded = false;
@@ -321,19 +392,61 @@ export class PlayerController {
       this.grounded = true;
     }
 
+    let solidFloorY: number | null = null;
     for (const box of colliders) {
       if (!this.overlaps(box, bodyHeight)) continue;
       const penX = Math.min(this.pos.x + PLAYER_RADIUS - box.minX, box.maxX - (this.pos.x - PLAYER_RADIUS));
       const penZ = Math.min(this.pos.z + PLAYER_RADIUS - box.minZ, box.maxZ - (this.pos.z - PLAYER_RADIUS));
       if (penX < 0.025 || penZ < 0.025) continue;
 
-      if (stepY <= 0 && this.pos.y - stepY >= box.maxY - 0.12) {
+      if (stepY <= 0 && this.pos.y - stepY >= box.maxY - 0.16) {
         this.pos.y = box.maxY;
         this.vel.y = 0;
         this.grounded = true;
-      } else if (stepY > 0 && this.pos.y + bodyHeight - stepY <= box.minY + 0.12) {
+        if (solidFloorY === null || box.maxY > solidFloorY) solidFloorY = box.maxY;
+      } else if (stepY > 0 && this.pos.y + bodyHeight - stepY <= box.minY + 0.14) {
         this.pos.y = box.minY - bodyHeight - 0.002;
         this.vel.y = 0;
+      }
+    }
+
+    // Smooth continuous staircase ramp glide (UP and DOWN with zero jolts, zero slab tug-of-war!)
+    const rampY = this.sampleRampHeight(this.pos.x, this.pos.z, this.pos.y, ramps);
+    if (rampY !== null && this.vel.y <= 0) {
+      const canSnapToRamp = solidFloorY === null || rampY >= solidFloorY - 0.01;
+      if (canSnapToRamp) {
+        if (this.pos.y <= rampY + 0.05) {
+          this.pos.y = rampY;
+          this.vel.y = 0;
+          this.grounded = true;
+        } else if (wasGrounded && !this.keys.has('Space') && this.pos.y - rampY <= 0.65) {
+          this.pos.y = rampY;
+          this.vel.y = 0;
+          this.grounded = true;
+        }
+      }
+    }
+
+    // Silky-smooth stair step-down snap (prevents bouncing when sprinting DOWN stairs!)
+    if (wasGrounded && !this.grounded && this.vel.y <= 0 && !this.keys.has('Space')) {
+      let bestFloor = -1;
+      for (const box of colliders) {
+        const penX = Math.min(this.pos.x + PLAYER_RADIUS - box.minX, box.maxX - (this.pos.x - PLAYER_RADIUS));
+        const penZ = Math.min(this.pos.z + PLAYER_RADIUS - box.minZ, box.maxZ - (this.pos.z - PLAYER_RADIUS));
+        if (penX < 0.03 || penZ < 0.03) continue;
+        const drop = this.pos.y - box.maxY;
+        if (drop > 0 && drop <= 0.36 && box.maxY > bestFloor) {
+          bestFloor = box.maxY;
+        }
+      }
+      if (bestFloor >= 0 && !this.collidesAtY(bestFloor + 0.01, colliders, bodyHeight)) {
+        this.pos.y = bestFloor;
+        this.vel.y = 0;
+        this.grounded = true;
+      } else if (this.pos.y > 0 && this.pos.y <= 0.36 && !this.collidesAtY(0.01, colliders, bodyHeight)) {
+        this.pos.y = 0;
+        this.vel.y = 0;
+        this.grounded = true;
       }
     }
 

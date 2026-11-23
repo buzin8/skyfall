@@ -7,7 +7,7 @@ export type LobbyTeam = 'blue' | 'red';
 export type MapId = 'factory' | 'foundry';
 export type WeaponId = 'vandal' | 'scarl';
 
-export const MAX_PLAYERS_PER_TEAM = 3;
+export const MAX_PLAYERS_PER_TEAM = 5;
 export const MIN_PLAYERS_PER_TEAM = 1;
 
 export interface LobbyPlayer {
@@ -36,6 +36,15 @@ export interface AABB {
   maxZ: number;
   blocksSight?: boolean;
   label?: string;
+}
+
+export interface RampCollider {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+  yAtMinZ: number;
+  yAtMaxZ: number;
 }
 
 export interface MinimapRect {

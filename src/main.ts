@@ -47,6 +47,7 @@ import { DamageHistoryEntry, HUD, NameplateTarget } from './ui/HUD';
 
 const ROUNDS_TO_WIN = 5;
 const ROUND_DURATION = 90;
+const TDM_ROUND_DURATION = 600; // 10-minute rounds for the 3x-expanded 2-floor 5v5 TDM arenas!
 
 // Team Death Match exclusive medical & utility-looting constants
 const TDM_BANDAGE_START = 4;
@@ -164,7 +165,7 @@ function buildDaylightEnvironment(renderer: THREE.WebGLRenderer): THREE.Texture 
   return rt.texture;
 }
 
-class SunfireGame {
+class SkyfallGame {
   private container = document.getElementById('game-container')!;
   private renderer: THREE.WebGLRenderer;
   private composer: EffectComposer | null = null;
@@ -187,6 +188,7 @@ class SunfireGame {
   private remotePlayers = new Map<string, RemotePlayer>();
   private mp!: MultiplayerManager;
   private isTdmMatch = false;
+  private levelIsTdmExpanded = false;
   private tdmHostSelectedMap: MapId = 'factory';
   private tdmLocalTeam: LobbyTeam = 'blue';
   private hostLivePlayers = new Map<string, SnapshotPlayerState>();
@@ -422,17 +424,18 @@ class SunfireGame {
     }
   }
 
-  private switchMap(mapId: MapId): void {
+  private switchMap(mapId: MapId, forceRebuild = false): void {
     if (this.isTdmMatch) return;
-    if (this.settings.map === mapId) return;
+    if (!forceRebuild && this.settings.map === mapId && !this.levelIsTdmExpanded) return;
     this.settings.map = mapId;
+    this.levelIsTdmExpanded = false;
     this.scene.remove(this.level.group);
     this.weapons.clearRoundFx();
     this.abilities.resetCharges();
 
     this.applyMapAtmosphereConfig(mapId);
     const builder = new LevelBuilder(this.textures);
-    this.level = builder.build(this.scene, mapId);
+    this.level = builder.build(this.scene, mapId, false);
 
     const mmCanvas = document.getElementById('minimap-canvas') as HTMLCanvasElement;
     this.minimap = new Minimap(mmCanvas, this.level.minimapRects, this.level.mapBounds);
@@ -719,6 +722,9 @@ class SunfireGame {
 
   private startNewMatch(): void {
     this.isTdmMatch = false;
+    if (this.levelIsTdmExpanded) {
+      this.switchMap(this.settings.map, true);
+    }
     this.activeHeal = null;
     this.localSpawnShield = 0;
     this.tdmBandages = 0;
@@ -865,7 +871,7 @@ class SunfireGame {
         this.hideTdmError();
         this.showTdmLobbyRoom();
         this.renderTdmLobby(state);
-        if (!this.isTdmMatch && state.map !== this.settings.map) {
+        if (!this.isTdmMatch && (state.map !== this.settings.map || !this.levelIsTdmExpanded)) {
           this.switchMapForTdm(state.map);
         }
       },
@@ -1005,7 +1011,7 @@ class SunfireGame {
     const nameInput = document.getElementById('tdm-player-name') as HTMLInputElement;
     const codeInput = document.getElementById('tdm-join-code') as HTMLInputElement;
 
-    const savedName = localStorage.getItem('sunfire_tdm_name');
+    const savedName = localStorage.getItem('skyfall_tdm_name') || localStorage.getItem('sunfire_tdm_name');
     if (savedName) {
       nameInput.value = savedName;
     }
@@ -1013,7 +1019,7 @@ class SunfireGame {
     nameInput.addEventListener('input', () => {
       this.hideTdmError();
       const cleaned = sanitizePlayerName(nameInput.value);
-      if (cleaned) localStorage.setItem('sunfire_tdm_name', cleaned);
+      if (cleaned) localStorage.setItem('skyfall_tdm_name', cleaned);
     });
 
     codeInput.addEventListener('input', () => {
@@ -1039,7 +1045,7 @@ class SunfireGame {
       this.sound.unlock();
       this.hideTdmError();
       const clean = sanitizePlayerName(nameInput.value);
-      if (clean) localStorage.setItem('sunfire_tdm_name', clean);
+      if (clean) localStorage.setItem('skyfall_tdm_name', clean);
       this.mp.hostLobby(nameInput.value, this.tdmHostSelectedMap);
     });
 
@@ -1047,7 +1053,7 @@ class SunfireGame {
       this.sound.unlock();
       this.hideTdmError();
       const clean = sanitizePlayerName(nameInput.value);
-      if (clean) localStorage.setItem('sunfire_tdm_name', clean);
+      if (clean) localStorage.setItem('skyfall_tdm_name', clean);
       this.mp.joinLobby(nameInput.value, codeInput.value);
     });
 
@@ -1099,10 +1105,15 @@ class SunfireGame {
       this.mp.leaveLobby(true);
       this.isTdmMatch = false;
       this.clearRemotePlayers();
+      this.clearLootDrops();
       this.tdmOverlay.classList.add('hidden');
       this.menuOverlay.classList.remove('hidden');
       this.hideTdmError();
-      this.setupShowcaseFrame();
+      if (this.levelIsTdmExpanded) {
+        this.switchMap(this.settings.map, true);
+      } else {
+        this.setupShowcaseFrame();
+      }
     };
 
     document.getElementById('btn-tdm-leave')!.addEventListener('click', closeLobby);
@@ -1236,15 +1247,17 @@ class SunfireGame {
   }
 
   private switchMapForTdm(mapId: MapId): void {
-    if (this.settings.map === mapId) return;
+    if (this.settings.map === mapId && this.levelIsTdmExpanded) return;
     this.settings.map = mapId;
+    this.levelIsTdmExpanded = true;
     this.scene.remove(this.level.group);
     this.weapons.clearRoundFx();
     this.abilities.resetCharges();
 
     this.applyMapAtmosphereConfig(mapId);
     const builder = new LevelBuilder(this.textures);
-    this.level = builder.build(this.scene, mapId);
+    // Build the 3x-expanded 2-floor Team Death Match arena (Vikendi TDM / Warehouse TDM)!
+    this.level = builder.build(this.scene, mapId, true);
 
     const mmCanvas = document.getElementById('minimap-canvas') as HTMLCanvasElement;
     this.minimap = new Minimap(mmCanvas, this.level.minimapRects, this.level.mapBounds);
@@ -1258,19 +1271,17 @@ class SunfireGame {
     if (team === 'blue') {
       const slots = [
         this.level.playerSpawn.pos,
-        this.level.allySpawns[0]?.pos ?? new THREE.Vector3(-2.6, 0, 7.6),
-        this.level.allySpawns[1]?.pos ?? new THREE.Vector3(2.8, 0, 7.4),
+        ...this.level.allySpawns.map((s) => s.pos),
       ];
       return {
         pos: slots[slotIndex % slots.length].clone(),
         yaw: 0.0, // Camera looks -Z (North, straight into the arena)
       };
     }
-    const redSlots = [
-      this.level.enemySpawns[0]?.pos ?? new THREE.Vector3(0.35, 0, -9.2),
-      this.level.enemySpawns[1]?.pos ?? new THREE.Vector3(-5.4, 0, -9.8),
-      this.level.enemySpawns[2]?.pos ?? new THREE.Vector3(5.6, 0, -10.2),
-    ];
+    const redSlots =
+      this.level.enemySpawns.length > 0
+        ? this.level.enemySpawns.map((s) => s.pos)
+        : [new THREE.Vector3(0, 0, -25.5)];
     return {
       pos: redSlots[slotIndex % redSlots.length].clone(),
       yaw: Math.PI, // Camera looks +Z (South, straight toward Blue Team)
@@ -1294,7 +1305,7 @@ class SunfireGame {
     }
     return {
       roundNumber,
-      roundTimer: ROUND_DURATION,
+      roundTimer: TDM_ROUND_DURATION,
       blueScore,
       redScore,
       spawns,
@@ -1608,7 +1619,7 @@ class SunfireGame {
           const drop: NetLootSpawnPayload = {
             dropId: `loot_${++this.lootDropSeq}`,
             victimName: victimLobby.name,
-            pos: { x: victimState.x, y: 0, z: victimState.z },
+            pos: { x: victimState.x, y: victimState.y, z: victimState.z },
             contents: { ...deadUtils },
           };
           deadUtils.frag = 0;
@@ -1733,7 +1744,7 @@ class SunfireGame {
     const drop = new LootDrop(
       data.dropId,
       data.victimName,
-      new THREE.Vector3(data.pos.x, 0, data.pos.z),
+      new THREE.Vector3(data.pos.x, data.pos.y, data.pos.z),
       data.contents,
       this.scene
     );
@@ -1748,8 +1759,9 @@ class SunfireGame {
     if (!pickerState || !pickerState.alive) return;
 
     const dx = pickerState.x - drop.pos.x;
+    const dy = Math.abs(pickerState.y - drop.pos.y);
     const dz = pickerState.z - drop.pos.z;
-    if (dx * dx + dz * dz > 4.4 * 4.4) return;
+    if (dy > 2.2 || dx * dx + dz * dz > 4.4 * 4.4) return;
 
     this.hostLootDrops.delete(dropId);
     const pickerUtils = this.hostPlayerUtils.get(pickerId);
@@ -2121,7 +2133,11 @@ class SunfireGame {
     if (document.pointerLockElement === this.renderer.domElement) {
       document.exitPointerLock?.();
     }
-    this.setupShowcaseFrame();
+    if (this.levelIsTdmExpanded) {
+      this.switchMap(this.settings.map, true);
+    } else {
+      this.setupShowcaseFrame();
+    }
   }
 
   /**
@@ -2665,7 +2681,7 @@ class SunfireGame {
         const dy = rpEye.y - eye.y;
         const dz = rpEye.z - eye.z;
         const dist = Math.hypot(dx, dy, dz);
-        if (dist > 44) {
+        if (dist > 74) {
           rp.losVisible = false;
           continue;
         }
@@ -2674,7 +2690,7 @@ class SunfireGame {
         if (dot > 0.32) {
           const clear = hasClearSight(eye, rpEye, this.level.raycastMeshes, this.abilities.smokes);
           rp.losVisible = clear || dist < 3.0;
-          if (clear && dot > 0.56 && dist <= 38) {
+          if (clear && dot > 0.56 && dist <= 64) {
             rp.spottedTimer = 2.6;
           }
         } else {
@@ -2750,7 +2766,8 @@ class SunfireGame {
           this.weapons.currentWeapon.moveSpeedMult * healSpeedMult,
           this.weapons.recoilPitch,
           this.weapons.recoilYaw,
-          this.level.mapBounds
+          this.level.mapBounds,
+          this.level.ramps
         );
 
         if (this.player.alive && this.roundActive) {
@@ -2822,7 +2839,7 @@ class SunfireGame {
       let closestDistSq = TDM_LOOT_PICKUP_RANGE * TDM_LOOT_PICKUP_RANGE;
       for (const drop of this.lootDrops.values()) {
         drop.update(dt, elapsed);
-        if (this.player.alive) {
+        if (this.player.alive && Math.abs(drop.pos.y - this.player.pos.y) < 1.9) {
           const dx = drop.pos.x - this.player.pos.x;
           const dz = drop.pos.z - this.player.pos.z;
           const dSq = dx * dx + dz * dz;
@@ -2901,7 +2918,8 @@ class SunfireGame {
           closestDrop ? this.formatUtilitySummary(closestDrop.contents) : []
         );
         this.hud.updateCrosshair(this.weapons.currentSpread, this.weapons.isAds);
-        this.hud.updateZone(this.player.getZoneName(this.level.zones));
+        const zoneBase = this.player.getZoneName(this.level.zones);
+        this.hud.updateZone(this.player.pos.y >= 3.5 ? `${zoneBase} (2F)` : zoneBase);
 
         const bluePips: boolean[] = [];
         const redPips: boolean[] = [];
@@ -2957,10 +2975,10 @@ class SunfireGame {
         for (const drop of this.lootDrops.values()) {
           nameplates.push({
             id: `loot_${drop.id}`,
-            name: `F - LOOT • ${drop.victimName}`,
+            name: `F -> LOOT • ${drop.victimName}`,
             team: 'loot',
             hpRatio: 1,
-            headWorld: new THREE.Vector3(drop.pos.x, 0.92, drop.pos.z),
+            headWorld: new THREE.Vector3(drop.pos.x, drop.pos.y + 0.92, drop.pos.z),
           });
         }
         this.hud.updateNameplates(nameplates, this.camera);
@@ -3149,5 +3167,5 @@ class SunfireGame {
 }
 
 preloadSoldierTemplate().then(() => {
-  new SunfireGame();
+  new SkyfallGame();
 });

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
-import { AABB, MapId, MinimapRect, Waypoint, ZoneDef } from '../types';
+import { AABB, MapId, MinimapRect, RampCollider, Waypoint, ZoneDef } from '../types';
 import { TextureLibrary } from '../textures/ProceduralTextures';
+import { TdmLevelBuilder } from './TdmLevelBuilder';
 
 export interface FlickerLight {
   light: THREE.PointLight;
@@ -13,6 +14,7 @@ export interface FlickerLight {
 export interface BuiltLevel {
   group: THREE.Group;
   colliders: AABB[];
+  ramps?: RampCollider[];
   raycastMeshes: THREE.Object3D[];
   minimapRects: MinimapRect[];
   waypoints: Waypoint[];
@@ -153,7 +155,10 @@ export class LevelBuilder {
     });
   }
 
-  public build(scene: THREE.Scene, mapId: MapId = 'factory'): BuiltLevel {
+  public build(scene: THREE.Scene, mapId: MapId = 'factory', tdmExpanded = false): BuiltLevel {
+    if (tdmExpanded) {
+      return new TdmLevelBuilder(this.tex).build(scene, mapId);
+    }
     if (mapId === 'factory') {
       return this.buildCryzenFactory(scene);
     }

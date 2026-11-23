@@ -993,7 +993,8 @@ export class WeaponSystem {
     pool.rotation.z = Math.random() * Math.PI * 2;
     const shiftX = impulseDir ? impulseDir.x * 0.38 : (Math.random() - 0.5) * 0.25;
     const shiftZ = impulseDir ? impulseDir.z * 0.38 : (Math.random() - 0.5) * 0.25;
-    pool.position.set(pos.x + shiftX, 0.028, pos.z + shiftZ);
+    const floorY = Math.max(0, pos.y);
+    pool.position.set(pos.x + shiftX, floorY + 0.028, pos.z + shiftZ);
     pool.scale.setScalar(0.14);
     this.fxGroup.add(pool);
 
@@ -1019,7 +1020,7 @@ export class WeaponSystem {
       const dist = 0.48 + Math.random() * 0.85;
       const sx = pos.x + shiftX + Math.cos(ang) * dist;
       const sz = pos.z + shiftZ + Math.sin(ang) * dist;
-      this.spawnFloorBloodSplatter(sx, sz, 0.34 + Math.random() * 0.42);
+      this.spawnFloorBloodSplatter(sx, sz, 0.34 + Math.random() * 0.42, floorY);
     }
   }
 
@@ -1088,11 +1089,11 @@ export class WeaponSystem {
     }
   }
 
-  private spawnFloorBloodSplatter(x: number, z: number, scale: number): void {
+  private spawnFloorBloodSplatter(x: number, z: number, scale: number, floorY = 0): void {
     const splat = new THREE.Mesh(this.bloodDecalGeo, this.bloodDecalMat);
     splat.rotation.x = -Math.PI / 2;
     splat.rotation.z = Math.random() * Math.PI * 2;
-    splat.position.set(x, 0.027 + Math.random() * 0.005, z);
+    splat.position.set(x, floorY + 0.027 + Math.random() * 0.005, z);
     splat.scale.setScalar(scale);
     this.fxGroup.add(splat);
     this.decals.push({ mesh: splat, life: 28, isBlood: true });

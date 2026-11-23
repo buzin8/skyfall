@@ -87,7 +87,6 @@ export class LootDrop {
     this.id = id;
     this.victimName = victimName;
     this.pos = pos.clone();
-    this.pos.y = 0;
     this.contents = { ...contents };
 
     const a = getSharedAssets();
