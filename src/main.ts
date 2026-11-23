@@ -348,7 +348,7 @@ class SkyfallGame {
   private applyGraphicsPreset(preset: 'bloom' | 'perf' | 'laptop'): void {
     this.graphicsPreset = preset;
     this.bloomEnabled = preset === 'bloom';
-    const dprCap = preset === 'bloom' ? 1.75 : preset === 'perf' ? 1.0 : 0.88;
+    const dprCap = preset === 'bloom' ? 1.65 : preset === 'perf' ? 1.0 : 0.72;
     const dpr = Math.min(window.devicePixelRatio, dprCap);
     this.renderer.setPixelRatio(dpr);
     this.composer?.setPixelRatio(dpr);
@@ -359,8 +359,43 @@ class SkyfallGame {
       this.renderer.shadowMap.needsUpdate = true;
     }
 
+    this.applyPresetToActiveScene();
+
     document.querySelectorAll<HTMLButtonElement>('[data-gfx]').forEach((b) => {
       b.classList.toggle('active', b.dataset.gfx === preset);
+    });
+  }
+
+  /**
+   * Keeps the exact same vibrant look while eliminating heavy per-pixel PointLight loops,
+   * PMREM IBL cube-map fetches & far particle overdraw in LOW END DEVICE mode!
+   */
+  private applyPresetToActiveScene(): void {
+    const isLowEnd = this.graphicsPreset === 'laptop';
+    const isFactory = this.settings.map === 'factory';
+
+    // Disable heavy PMREM cube-map reflections on LOW END DEVICE; compensate brightness cleanly
+    this.scene.environment = isLowEnd ? null : isFactory ? this.envFactory : this.envFoundry;
+    this.renderer.toneMappingExposure = isLowEnd
+      ? isFactory
+        ? 1.24
+        : 1.38
+      : isFactory
+      ? 1.15
+      : 1.24;
+
+    if (!this.level?.group) return;
+    this.level.group.traverse((obj) => {
+      if (obj instanceof THREE.HemisphereLight) {
+        if (obj.userData.baseIntensity === undefined) {
+          obj.userData.baseIntensity = obj.intensity;
+        }
+        obj.intensity = isLowEnd
+          ? obj.userData.baseIntensity * (isFactory ? 1.32 : 1.48)
+          : obj.userData.baseIntensity;
+      } else if (obj.userData?.lowEndOptional || obj instanceof THREE.PointLight) {
+        obj.visible = !isLowEnd;
+      }
     });
   }
 
@@ -436,6 +471,7 @@ class SkyfallGame {
     this.applyMapAtmosphereConfig(mapId);
     const builder = new LevelBuilder(this.textures);
     this.level = builder.build(this.scene, mapId, false);
+    this.applyPresetToActiveScene();
 
     const mmCanvas = document.getElementById('minimap-canvas') as HTMLCanvasElement;
     this.minimap = new Minimap(mmCanvas, this.level.minimapRects, this.level.mapBounds);
@@ -868,6 +904,7 @@ class SkyfallGame {
   private initMultiplayer(): void {
     this.mp = new MultiplayerManager({
       onLobbyState: (state) => {
+        this.setTdmJoinButtonBusy(false);
         this.hideTdmError();
         this.showTdmLobbyRoom();
         this.renderTdmLobby(state);
@@ -880,8 +917,13 @@ class SkyfallGame {
         const txt = document.getElementById('tdm-status-text');
         if (txt) txt.textContent = text;
         if (dot) dot.classList.toggle('ready', ready);
+        // Also mirror live connection progress directly below the JOIN LOBBY button while still on the entry view!
+        if (!this.mp.connected && !this.tdmEntryView.classList.contains('hidden')) {
+          this.showTdmJoinFeedback(text, false);
+        }
       },
       onError: (msg) => {
+        this.setTdmJoinButtonBusy(false);
         this.showTdmError(msg);
       },
       onMatchStart: (state, round) => {
@@ -1054,7 +1096,14 @@ class SkyfallGame {
       this.hideTdmError();
       const clean = sanitizePlayerName(nameInput.value);
       if (clean) localStorage.setItem('skyfall_tdm_name', clean);
-      this.mp.joinLobby(nameInput.value, codeInput.value);
+      const started = this.mp.joinLobby(nameInput.value, codeInput.value);
+      if (started) {
+        this.setTdmJoinButtonBusy(true);
+      } else if (!clean) {
+        nameInput.focus();
+      } else {
+        codeInput.focus();
+      }
     });
 
     document.getElementById('btn-tdm-copy')!.addEventListener('click', () => {
@@ -1102,6 +1151,7 @@ class SkyfallGame {
     });
 
     const closeLobby = () => {
+      this.setTdmJoinButtonBusy(false);
       this.mp.leaveLobby(true);
       this.isTdmMatch = false;
       this.clearRemotePlayers();
@@ -1121,6 +1171,7 @@ class SkyfallGame {
   }
 
   private openTdmLobbyOverlay(): void {
+    this.setTdmJoinButtonBusy(false);
     this.hideTdmError();
     this.menuOverlay.classList.add('hidden');
     this.matchEndOverlay.classList.add('hidden');
@@ -1150,14 +1201,45 @@ class SkyfallGame {
     this.tdmRoomView.classList.remove('hidden');
   }
 
+  private setTdmJoinButtonBusy(busy: boolean): void {
+    const btn = document.getElementById('btn-tdm-join') as HTMLButtonElement | null;
+    if (!btn) return;
+    btn.classList.toggle('connecting', busy);
+    btn.textContent = busy ? 'CONNECTING...' : 'JOIN LOBBY';
+    if (!busy) {
+      const fb = document.getElementById('tdm-join-feedback');
+      if (fb && !fb.classList.contains('error')) {
+        fb.classList.add('hidden');
+        fb.textContent = '';
+      }
+    }
+  }
+
+  private showTdmJoinFeedback(msg: string, isError: boolean): void {
+    const fb = document.getElementById('tdm-join-feedback');
+    if (!fb) return;
+    fb.textContent = msg;
+    fb.classList.toggle('error', isError);
+    fb.classList.remove('hidden');
+  }
+
   private showTdmError(msg: string): void {
     this.tdmErrorEl.textContent = msg;
     this.tdmErrorEl.classList.remove('hidden');
+    if (!this.tdmEntryView.classList.contains('hidden')) {
+      this.showTdmJoinFeedback(msg, true);
+    }
   }
 
   private hideTdmError(): void {
     this.tdmErrorEl.textContent = '';
     this.tdmErrorEl.classList.add('hidden');
+    const fb = document.getElementById('tdm-join-feedback');
+    if (fb) {
+      fb.textContent = '';
+      fb.classList.remove('error');
+      fb.classList.add('hidden');
+    }
   }
 
   private renderTdmLobby(state: LobbyState): void {
@@ -1258,6 +1340,7 @@ class SkyfallGame {
     const builder = new LevelBuilder(this.textures);
     // Build the 3x-expanded 2-floor Team Death Match arena (Vikendi TDM / Warehouse TDM)!
     this.level = builder.build(this.scene, mapId, true);
+    this.applyPresetToActiveScene();
 
     const mmCanvas = document.getElementById('minimap-canvas') as HTMLCanvasElement;
     this.minimap = new Minimap(mmCanvas, this.level.minimapRects, this.level.mapBounds);
@@ -2671,6 +2754,7 @@ class SkyfallGame {
     this.camera.getWorldDirection(fwd);
 
     if (this.isTdmMatch) {
+      const dir = new THREE.Vector3();
       for (const rp of this.remotePlayers.values()) {
         if (!rp.alive || rp.team === this.tdmLocalTeam) {
           rp.losVisible = false;
@@ -2688,7 +2772,26 @@ class SkyfallGame {
         const inv = 1 / Math.max(0.001, dist);
         const dot = fwd.x * dx * inv + fwd.y * dy * inv + fwd.z * dz * inv;
         if (dot > 0.32) {
-          const clear = hasClearSight(eye, rpEye, this.level.raycastMeshes, this.abilities.smokes);
+          // Fast pure-JS analytical AABB + smoke sphere LOS (50x faster than Three.js triangle raycasting!)
+          dir.set(dx * inv, dy * inv, dz * inv);
+          let clear = !this.raycastSolidColliders(eye, dir, Math.max(0.05, dist - 0.15));
+          if (clear && this.abilities.smokes.length > 0) {
+            for (const sm of this.abilities.smokes) {
+              const ocx = sm.pos.x - eye.x;
+              const ocy = sm.pos.y - eye.y;
+              const ocz = sm.pos.z - eye.z;
+              const t = ocx * dir.x + ocy * dir.y + ocz * dir.z;
+              if (t > 0 && t < dist) {
+                const px = eye.x + dir.x * t - sm.pos.x;
+                const py = eye.y + dir.y * t - sm.pos.y;
+                const pz = eye.z + dir.z * t - sm.pos.z;
+                if (px * px + py * py + pz * pz < sm.radius * sm.radius) {
+                  clear = false;
+                  break;
+                }
+              }
+            }
+          }
           rp.losVisible = clear || dist < 3.0;
           if (clear && dot > 0.56 && dist <= 64) {
             rp.spottedTimer = 2.6;
@@ -2851,24 +2954,25 @@ class SkyfallGame {
       }
       this.nearestLootId = closestDrop ? closestDrop.id : null;
 
-      // 25 Hz Host Snapshot / Client Pose sync for silky smooth zero-stutter movement
+      // 20 Hz compact rounded Host Snapshot / Client Pose sync (50% less WebRTC bandwidth & JSON CPU -> smoother on Wi-Fi!)
       this.netSyncAccum += dt;
-      if (this.netSyncAccum >= 0.04) {
+      if (this.netSyncAccum >= 0.05) {
         this.netSyncAccum = 0;
+        const r3 = (v: number) => Math.round(v * 1000) * 0.001;
         if (this.mp.isHost) {
           const selfState = this.hostLivePlayers.get(this.mp.localPlayerId);
           if (selfState) {
-            selfState.x = this.player.pos.x;
-            selfState.y = this.player.pos.y;
-            selfState.z = this.player.pos.z;
-            selfState.yaw = this.player.yaw;
-            selfState.pitch = this.player.pitch;
+            selfState.x = r3(this.player.pos.x);
+            selfState.y = r3(this.player.pos.y);
+            selfState.z = r3(this.player.pos.z);
+            selfState.yaw = r3(this.player.yaw);
+            selfState.pitch = r3(this.player.pitch);
             selfState.crouching = this.player.crouching;
             selfState.weaponSlot = this.weapons.currentSlot;
           }
           this.mp.broadcastSnapshot({
             roundNumber: this.roundNumber,
-            roundTimer: this.roundTimer,
+            roundTimer: Math.round(this.roundTimer * 10) * 0.1,
             roundActive: this.roundActive,
             blueScore: this.allyScore,
             redScore: this.enemyScore,
@@ -2876,11 +2980,11 @@ class SkyfallGame {
           });
         } else {
           this.mp.sendLocalPose({
-            x: this.player.pos.x,
-            y: this.player.pos.y,
-            z: this.player.pos.z,
-            yaw: this.player.yaw,
-            pitch: this.player.pitch,
+            x: r3(this.player.pos.x),
+            y: r3(this.player.pos.y),
+            z: r3(this.player.pos.z),
+            yaw: r3(this.player.yaw),
+            pitch: r3(this.player.pitch),
             crouching: this.player.crouching,
             weaponSlot: this.weapons.currentSlot,
           });

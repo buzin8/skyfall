@@ -202,21 +202,23 @@ export interface MultiplayerCallbacks {
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const PEER_PREFIX = 'skyfall-tdm-';
+const LEGACY_PEER_PREFIX = 'sunfire-tdm-';
 
 const ICE_CONFIG: RTCConfiguration = {
-  iceCandidatePoolSize: 8,
+  iceCandidatePoolSize: 6,
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
     { urls: 'stun:stun.cloudflare.com:3478' },
     { urls: 'stun:global.stun.twilio.com:3478' },
-    // Public OpenRelay TURN fallback for friends behind strict home CGNAT / symmetric NAT / mobile 4G/5G
+    // Public OpenRelay TURN/TURNS fallback for friends behind strict home CGNAT / symmetric NAT / mobile 4G/5G
     {
       urls: [
         'turn:openrelay.metered.ca:80',
         'turn:openrelay.metered.ca:443',
         'turn:openrelay.metered.ca:443?transport=tcp',
+        'turns:openrelay.metered.ca:443?transport=tcp',
       ],
       username: 'openrelayproject',
       credential: 'openrelayproject',
@@ -264,8 +266,10 @@ export class MultiplayerManager {
   private clientConns = new Map<string, DataConnection>(); // host -> peerId
   private clientTransport = new Map<string, 'webrtc' | 'local'>();
   private activeClientLink: 'webrtc' | 'local' | null = null;
-  private bc: BroadcastChannel | null = null;
+  private bcChannels: BroadcastChannel[] = [];
   private joinTimeout: number | null = null;
+  private joinRetryInterval: number | null = null;
+  private hostReconnectTimeout: number | null = null;
   private keepaliveInterval: number | null = null;
 
   constructor(private cb: MultiplayerCallbacks) {
@@ -346,10 +350,27 @@ export class MultiplayerManager {
     this.cb.onLobbyState(this.cloneLobbyState());
     this.startKeepalive();
 
-    // 1. Instant same-browser BroadcastChannel link (for fast multi-tab play/testing)
+    // 1. Instant same-browser BroadcastChannel link (supports both skyfall-tdm & legacy sunfire-tdm tabs!)
     this.openBroadcastChannel(code);
 
-    // 2. Public WebRTC PeerJS host node (allows ANY player on Vercel to host & friends from any home to join!)
+    // 2. Public WebRTC PeerJS host node with automatic signaling recovery
+    this.registerHostPeer(code, name, map);
+    return true;
+  }
+
+  private registerHostPeer(code: string, name: string, map: MapId): void {
+    if (!this.isHost || !this.lobbyState || this.lobbyState.code !== code) return;
+    if (this.hostReconnectTimeout !== null) {
+      window.clearTimeout(this.hostReconnectTimeout);
+      this.hostReconnectTimeout = null;
+    }
+    if (this.peer) {
+      try {
+        this.peer.destroy();
+      } catch {}
+      this.peer = null;
+    }
+
     try {
       const peer = new Peer(`${PEER_PREFIX}${code}`, { config: ICE_CONFIG, debug: 0 });
       this.peer = peer;
@@ -364,27 +385,37 @@ export class MultiplayerManager {
       });
 
       peer.on('disconnected', () => {
-        if (this.peer !== peer || peer.destroyed) return;
+        if (this.peer !== peer || peer.destroyed || !this.isHost) return;
         this.cb.onStatus('RECONNECTING SIGNALING...', false);
         try {
           peer.reconnect();
-        } catch {}
+        } catch {
+          this.scheduleHostReconnect(code, name, map);
+        }
       });
 
       peer.on('error', (err) => {
-        if (this.peer !== peer) return;
+        if (this.peer !== peer || !this.isHost) return;
         if (err?.type === 'unavailable-id' && this.lobbyState && !this.lobbyState.inMatch) {
           // Rare code collision — automatically regenerate a clean code and re-host!
           this.hostLobby(name, map);
           return;
         }
-        this.cb.onStatus('LOCAL / LAN READY (ONLINE RETRYING)', true);
+        this.cb.onStatus('RECONNECTING ONLINE LOBBY...', false);
+        this.scheduleHostReconnect(code, name, map);
       });
     } catch {
       this.cb.onStatus('LOCAL MULTI-TAB READY', true);
     }
+  }
 
-    return true;
+  private scheduleHostReconnect(code: string, name: string, map: MapId): void {
+    if (this.hostReconnectTimeout !== null || !this.isHost) return;
+    this.hostReconnectTimeout = window.setTimeout(() => {
+      this.hostReconnectTimeout = null;
+      if (!this.isHost || !this.lobbyState || this.lobbyState.code !== code) return;
+      this.registerHostPeer(code, name, map);
+    }, 2500);
   }
 
   public joinLobby(rawName: string, rawCode: string): boolean {
@@ -395,7 +426,7 @@ export class MultiplayerManager {
       return false;
     }
     if (code.length < 4) {
-      this.cb.onError('Enter a valid Team Code.');
+      this.cb.onError('Enter a valid 6-character Team Code.');
       return false;
     }
 
@@ -409,25 +440,65 @@ export class MultiplayerManager {
     this.openBroadcastChannel(code);
     this.postLocal('*', { type: 'JOIN_REQ', playerId: this.localPlayerId, name });
 
-    // 2. Simultaneously connect over PeerJS WebRTC (works across different homes/networks on Vercel!)
+    // 2. Simultaneously connect over PeerJS WebRTC (with automatic legacy sunfire-tdm- fallback!)
+    let triedLegacyPrefix = false;
+    let activePrefix = PEER_PREFIX;
+
     try {
       const peer = new Peer({ config: ICE_CONFIG, debug: 0 });
       this.peer = peer;
 
-      peer.on('open', () => {
-        if (this.peer !== peer || this.activeClientLink === 'local') return;
-        const conn = peer.connect(`${PEER_PREFIX}${code}`, {
+      const connectToHost = (prefix: string) => {
+        if (this.peer !== peer || this.connected || this.activeClientLink === 'local') return;
+        activePrefix = prefix;
+        this.cb.onStatus(`LOCATING LOBBY ${code}...`, false);
+
+        if (this.hostConn) {
+          try {
+            this.hostConn.close();
+          } catch {}
+          this.hostConn = null;
+        }
+
+        const conn = peer.connect(`${prefix}${code}`, {
           reliable: true,
           serialization: 'json',
         });
         this.hostConn = conn;
-        conn.on('open', () => {
+
+        const sendJoinReq = () => {
+          if (this.connected || this.activeClientLink === 'local' || this.hostConn !== conn) return;
+          if (conn.open || conn.dataChannel?.readyState === 'open') {
+            try {
+              conn.send({ type: 'JOIN_REQ', playerId: this.localPlayerId, name } satisfies WirePacket);
+            } catch {}
+          }
+        };
+
+        const onConnOpen = () => {
+          if (this.hostConn !== conn) return;
           if (this.activeClientLink === 'local') {
-            conn.close();
+            try {
+              conn.close();
+            } catch {}
             return;
           }
-          conn.send({ type: 'JOIN_REQ', playerId: this.localPlayerId, name } satisfies WirePacket);
-        });
+          this.cb.onStatus(`JOINING ${code}...`, false);
+          sendJoinReq();
+          this.clearJoinRetry();
+          this.joinRetryInterval = window.setInterval(() => {
+            if (this.connected || this.hostConn !== conn) {
+              this.clearJoinRetry();
+              return;
+            }
+            sendJoinReq();
+          }, 1200);
+        };
+
+        conn.on('open', onConnOpen);
+        if (conn.open) {
+          onConnOpen();
+        }
         conn.on('data', (raw) => {
           if (this.activeClientLink === 'local') return;
           this.handleClientPacket(raw as WirePacket, 'webrtc');
@@ -438,28 +509,53 @@ export class MultiplayerManager {
           }
         });
         conn.on('error', () => {
-          // Wait for timeout or BroadcastChannel fallback
+          // Handled by peer error / timeout fallback
         });
+      };
+
+      peer.on('open', () => {
+        if (this.peer !== peer || this.activeClientLink === 'local') return;
+        connectToHost(PEER_PREFIX);
       });
 
       peer.on('error', (err) => {
-        if (this.peer !== peer || this.connected) return;
-        if (err?.type === 'peer-unavailable' && this.activeClientLink !== 'local') {
-          this.clearJoinTimeout();
+        if (this.peer !== peer || this.connected || this.activeClientLink === 'local') return;
+        if (err?.type === 'peer-unavailable') {
+          // If host is still running an older cached tab with sunfire-tdm-, automatically try it!
+          if (!triedLegacyPrefix && activePrefix === PEER_PREFIX) {
+            triedLegacyPrefix = true;
+            connectToHost(LEGACY_PEER_PREFIX);
+            return;
+          }
+          this.clearJoinTimers();
           this.leaveLobby(false);
-          this.cb.onError(`Lobby "${code}" not found. Check the Team Code and try again.`);
+          this.cb.onError(`Lobby "${code}" not found. Make sure the host is online and check the Team Code.`);
+          return;
+        }
+        if (err?.type === 'network' || err?.type === 'server-error' || err?.type === 'socket-error') {
+          this.cb.onStatus('SIGNALING RETRY...', false);
+          try {
+            if (!peer.destroyed && peer.disconnected) peer.reconnect();
+          } catch {}
         }
       });
     } catch {
       // Fallback relies on BroadcastChannel
     }
 
+    // Also retry BroadcastChannel JOIN_REQ once after 500ms in case local host tab was waking up
+    window.setTimeout(() => {
+      if (!this.connected && !this.isHost && this.bcChannels.length > 0) {
+        this.postLocal('*', { type: 'JOIN_REQ', playerId: this.localPlayerId, name });
+      }
+    }, 500);
+
     this.joinTimeout = window.setTimeout(() => {
       if (!this.connected) {
         this.leaveLobby(false);
-        this.cb.onError(`Could not reach lobby "${code}". Make sure the host is online.`);
+        this.cb.onError(`Could not reach lobby "${code}". Check the Team Code and make sure the host is online.`);
       }
-    }, 16000);
+    }, 18000);
 
     return true;
   }
@@ -600,7 +696,11 @@ export class MultiplayerManager {
   }
 
   public leaveLobby(notify = true): void {
-    this.clearJoinTimeout();
+    this.clearJoinTimers();
+    if (this.hostReconnectTimeout !== null) {
+      window.clearTimeout(this.hostReconnectTimeout);
+      this.hostReconnectTimeout = null;
+    }
     this.stopKeepalive();
     if (notify) {
       this.sendDisconnectNotice();
@@ -630,12 +730,12 @@ export class MultiplayerManager {
       } catch {}
       this.peer = null;
     }
-    if (this.bc) {
+    for (const bc of this.bcChannels) {
       try {
-        this.bc.close();
+        bc.close();
       } catch {}
-      this.bc = null;
     }
+    this.bcChannels = [];
   }
 
   private sendDisconnectNotice(): void {
@@ -647,34 +747,45 @@ export class MultiplayerManager {
     }
   }
 
-  private clearJoinTimeout(): void {
+  private clearJoinRetry(): void {
+    if (this.joinRetryInterval !== null) {
+      window.clearInterval(this.joinRetryInterval);
+      this.joinRetryInterval = null;
+    }
+  }
+
+  private clearJoinTimers(): void {
     if (this.joinTimeout !== null) {
       window.clearTimeout(this.joinTimeout);
       this.joinTimeout = null;
     }
+    this.clearJoinRetry();
   }
 
   private openBroadcastChannel(code: string): void {
     if (typeof BroadcastChannel === 'undefined') return;
-    const bc = new BroadcastChannel(`skyfall-tdm-${code}`);
-    this.bc = bc;
-    bc.onmessage = (ev) => {
-      const env = ev.data as LocalEnvelope | undefined;
-      if (!env || env.fromId === this.localPlayerId) return;
-      if (env.toId !== '*' && env.toId !== this.localPlayerId) return;
-      if (this.isHost) {
-        this.handleHostPacket(env.packet, env.fromId, 'local');
-      } else {
-        this.handleClientPacket(env.packet, 'local');
-      }
-    };
+    for (const prefix of [PEER_PREFIX, LEGACY_PEER_PREFIX]) {
+      const bc = new BroadcastChannel(`${prefix}${code}`);
+      this.bcChannels.push(bc);
+      bc.onmessage = (ev) => {
+        const env = ev.data as LocalEnvelope | undefined;
+        if (!env || env.fromId === this.localPlayerId) return;
+        if (env.toId !== '*' && env.toId !== this.localPlayerId) return;
+        if (this.isHost) {
+          this.handleHostPacket(env.packet, env.fromId, 'local');
+        } else {
+          this.handleClientPacket(env.packet, 'local');
+        }
+      };
+    }
   }
 
   private postLocal(toId: string, packet: WirePacket): void {
-    if (!this.bc) return;
-    try {
-      this.bc.postMessage({ fromId: this.localPlayerId, toId, packet } satisfies LocalEnvelope);
-    } catch {}
+    for (const bc of this.bcChannels) {
+      try {
+        bc.postMessage({ fromId: this.localPlayerId, toId, packet } satisfies LocalEnvelope);
+      } catch {}
+    }
   }
 
   private attachHostWebRtcConn(conn: DataConnection): void {
@@ -687,7 +798,11 @@ export class MultiplayerManager {
       this.handleHostPacket(pkt, boundPlayerId ?? conn.peer, 'webrtc', conn);
     });
     conn.on('close', () => {
-      if (boundPlayerId && this.clientTransport.get(boundPlayerId) === 'webrtc') {
+      if (
+        boundPlayerId &&
+        this.clientTransport.get(boundPlayerId) === 'webrtc' &&
+        this.clientConns.get(boundPlayerId) === conn
+      ) {
         this.removePlayerFromHost(boundPlayerId);
       }
     });
@@ -702,8 +817,14 @@ export class MultiplayerManager {
     if (!this.isHost || !this.lobbyState) return;
 
     if (pkt.type === 'JOIN_REQ') {
-      // Deduplicate if same player already registered on the other transport
+      // If the same player retries JOIN_REQ (e.g. missed WELCOME or double-click), refresh their connection & re-send WELCOME!
       if (this.lobbyState.players.some((p) => p.id === pkt.playerId)) {
+        this.clientTransport.set(pkt.playerId, transport);
+        if (transport === 'webrtc' && conn) {
+          this.clientConns.set(pkt.playerId, conn);
+        }
+        const snapshot = this.cloneLobbyState();
+        this.sendDirectFromHost(pkt.playerId, { type: 'WELCOME', state: snapshot, assignedId: pkt.playerId }, transport, conn);
         return;
       }
       if (this.lobbyState.inMatch) {
@@ -834,7 +955,7 @@ export class MultiplayerManager {
 
     if (pkt.type === 'WELCOME') {
       if (this.connected) return;
-      this.clearJoinTimeout();
+      this.clearJoinTimers();
       this.activeClientLink = transport;
       this.connected = true;
       this.lobbyState = pkt.state;
@@ -852,7 +973,7 @@ export class MultiplayerManager {
     }
 
     if (pkt.type === 'JOIN_REJECT') {
-      this.clearJoinTimeout();
+      this.clearJoinTimers();
       this.leaveLobby(false);
       this.cb.onError(pkt.reason);
       return;
@@ -915,7 +1036,9 @@ export class MultiplayerManager {
   ): void {
     if (transport === 'webrtc') {
       const c = conn ?? this.clientConns.get(targetId);
-      if (c?.open) {
+      if (!c) return;
+      const ready = c.open || c.dataChannel?.readyState === 'open';
+      if (ready) {
         // Drop non-critical pose snapshots if this peer's WebRTC send buffer is backed up (prevents lag buildup!)
         if (pkt.type === 'WORLD_SNAPSHOT' && (c.dataChannel?.bufferedAmount ?? 0) > 32768) {
           return;
@@ -923,6 +1046,13 @@ export class MultiplayerManager {
         try {
           c.send(pkt);
         } catch {}
+      } else if (pkt.type !== 'WORLD_SNAPSHOT') {
+        // Never silently drop WELCOME / JOIN_REJECT / LOBBY_STATE / MATCH_START if conn.open lags by a tick!
+        c.once('open', () => {
+          try {
+            c.send(pkt);
+          } catch {}
+        });
       }
     } else {
       this.postLocal(targetId, pkt);
