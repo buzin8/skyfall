@@ -636,6 +636,213 @@ function getContainerRoofTexture(theme: ContainerTheme): THREE.CanvasTexture {
   return tex;
 }
 
+let cachedCyberpunkFloor: { map: THREE.CanvasTexture; emissiveMap: THREE.CanvasTexture } | null = null;
+
+/**
+ * Generates a vibrant, seamlessly tiled 512x512 Neon Cyberpunk Retro Synthwave floor texture pair
+ * (diffuse + self-lit emissiveMap) with luminous midnight-indigo panels, glowing electric-cyan
+ * major grid lines, hot synthwave magenta/purple sub-grids, circuit corners & diamond nodes!
+ * Self-lit emissive guarantees the Warehouse TDM floor pops vividly even in LOW END DEVICE mode!
+ */
+function getCyberpunkFloorTextures(): { map: THREE.CanvasTexture; emissiveMap: THREE.CanvasTexture } {
+  if (cachedCyberpunkFloor) return cachedCyberpunkFloor;
+
+  const s = 512;
+
+  // --- 1. Diffuse Map ---
+  const diffCanvas = document.createElement('canvas');
+  diffCanvas.width = s;
+  diffCanvas.height = s;
+  const ctx = diffCanvas.getContext('2d')!;
+
+  // Rich synthwave indigo-violet deck base (never pitch black!)
+  const bg = ctx.createRadialGradient(s * 0.5, s * 0.5, 24, s * 0.5, s * 0.5, s * 0.72);
+  bg.addColorStop(0, '#2c2268');
+  bg.addColorStop(0.65, '#1f1850');
+  bg.addColorStop(1, '#16113c');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, s, s);
+
+  // Subtle retro CRT scanlines & metallic tile sheen
+  ctx.fillStyle = 'rgba(130, 175, 255, 0.045)';
+  for (let y = 0; y < s; y += 8) {
+    ctx.fillRect(0, y, s, 2);
+  }
+
+  // 4 inner beveled cyber-deck sub-tiles with subtle purple/cyan corner circuits
+  const half = s * 0.5;
+  for (let qx = 0; qx < 2; qx++) {
+    for (let qy = 0; qy < 2; qy++) {
+      const ox = qx * half;
+      const oy = qy * half;
+      const pGrad = ctx.createLinearGradient(ox + 14, oy + 14, ox + half - 14, oy + half - 14);
+      pGrad.addColorStop(0, 'rgba(66, 178, 255, 0.14)');
+      pGrad.addColorStop(0.5, 'rgba(148, 66, 255, 0.08)');
+      pGrad.addColorStop(1, 'rgba(255, 68, 200, 0.14)');
+      ctx.fillStyle = pGrad;
+      ctx.fillRect(ox + 16, oy + 16, half - 32, half - 32);
+
+      // Chamfered inner tech border
+      ctx.strokeStyle = 'rgba(110, 210, 255, 0.28)';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(ox + 22, oy + 22, half - 44, half - 44);
+
+      // Subtle diagonal retro circuit trace inside each quadrant
+      ctx.strokeStyle = qx === qy ? 'rgba(46, 244, 255, 0.34)' : 'rgba(255, 74, 210, 0.34)';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(ox + 34, oy + 58);
+      ctx.lineTo(ox + 58, oy + 34);
+      ctx.lineTo(ox + half - 58, oy + 34);
+      ctx.moveTo(ox + half - 34, oy + half - 58);
+      ctx.lineTo(ox + half - 58, oy + half - 34);
+      ctx.lineTo(ox + 58, oy + half - 34);
+      ctx.stroke();
+    }
+  }
+
+  // Soft neon bloom glow for magenta inner cross + electric cyan outer grid
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255, 56, 204, 0.34)';
+  ctx.lineWidth = 18;
+  ctx.beginPath();
+  ctx.moveTo(half, 0);
+  ctx.lineTo(half, s);
+  ctx.moveTo(0, half);
+  ctx.lineTo(s, half);
+  ctx.stroke();
+
+  ctx.strokeStyle = '#ff52db';
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.moveTo(half, 0);
+  ctx.lineTo(half, s);
+  ctx.moveTo(0, half);
+  ctx.lineTo(s, half);
+  ctx.stroke();
+
+  ctx.strokeStyle = '#ffe0fa';
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo(half, 0);
+  ctx.lineTo(half, s);
+  ctx.moveTo(0, half);
+  ctx.lineTo(s, half);
+  ctx.stroke();
+
+  // Electric cyan major border grid (tiles seamlessly at edges 0 and s!)
+  ctx.strokeStyle = 'rgba(38, 240, 255, 0.38)';
+  ctx.lineWidth = 22;
+  ctx.strokeRect(0, 0, s, s);
+
+  ctx.strokeStyle = '#2ef4ff';
+  ctx.lineWidth = 7;
+  ctx.strokeRect(0, 0, s, s);
+
+  ctx.strokeStyle = '#d8feff';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(0, 0, s, s);
+
+  // Glowing retro diamond intersection nodes (center + 4 corners)
+  const drawDiamond = (cx: number, cy: number, r: number, fill: string, stroke: string) => {
+    ctx.fillStyle = fill;
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - r);
+    ctx.lineTo(cx + r, cy);
+    ctx.lineTo(cx, cy + r);
+    ctx.lineTo(cx - r, cy);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  };
+  drawDiamond(half, half, 14, '#ff78e8', '#ffffff');
+  drawDiamond(0, 0, 16, '#58f8ff', '#ffffff');
+  drawDiamond(s, 0, 16, '#58f8ff', '#ffffff');
+  drawDiamond(0, s, 16, '#58f8ff', '#ffffff');
+  drawDiamond(s, s, 16, '#58f8ff', '#ffffff');
+  ctx.restore();
+
+  // --- 2. Self-Lit Emissive Map (keeps grid glowing vividly even with zero PointLights in LOW END DEVICE!) ---
+  const emCanvas = document.createElement('canvas');
+  emCanvas.width = s;
+  emCanvas.height = s;
+  const ectx = emCanvas.getContext('2d')!;
+
+  // Soft glowing ambient indigo deck sheen so floor panels themselves stay brightly readable
+  ectx.fillStyle = '#241a58';
+  ectx.fillRect(0, 0, s, s);
+
+  for (let qx = 0; qx < 2; qx++) {
+    for (let qy = 0; qy < 2; qy++) {
+      const ox = qx * half;
+      const oy = qy * half;
+      ectx.strokeStyle = qx === qy ? 'rgba(46, 244, 255, 0.42)' : 'rgba(220, 72, 255, 0.42)';
+      ectx.lineWidth = 2.5;
+      ectx.strokeRect(ox + 22, oy + 22, half - 44, half - 44);
+    }
+  }
+
+  // Vivid neon magenta sub-grid glow
+  ectx.strokeStyle = 'rgba(235, 58, 255, 0.45)';
+  ectx.lineWidth = 18;
+  ectx.beginPath();
+  ectx.moveTo(half, 0);
+  ectx.lineTo(half, s);
+  ectx.moveTo(0, half);
+  ectx.lineTo(s, half);
+  ectx.stroke();
+
+  ectx.strokeStyle = '#ff4cd8';
+  ectx.lineWidth = 5;
+  ectx.beginPath();
+  ectx.moveTo(half, 0);
+  ectx.lineTo(half, s);
+  ectx.moveTo(0, half);
+  ectx.lineTo(s, half);
+  ectx.stroke();
+
+  // Vivid electric cyan major grid glow
+  ectx.strokeStyle = 'rgba(38, 240, 255, 0.5)';
+  ectx.lineWidth = 22;
+  ectx.strokeRect(0, 0, s, s);
+
+  ectx.strokeStyle = '#36f6ff';
+  ectx.lineWidth = 7;
+  ectx.strokeRect(0, 0, s, s);
+
+  // Bright diamond intersection emitters
+  ectx.fillStyle = '#ffffff';
+  for (const [nx, ny] of [
+    [half, half],
+    [0, 0],
+    [s, 0],
+    [0, s],
+    [s, s],
+  ]) {
+    ectx.beginPath();
+    ectx.arc(nx, ny, 9, 0, Math.PI * 2);
+    ectx.fill();
+  }
+
+  const configureRepeat = (c: HTMLCanvasElement) => {
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.wrapS = THREE.RepeatWrapping;
+    t.wrapT = THREE.RepeatWrapping;
+    t.repeat.set(14, 15);
+    t.anisotropy = 4;
+    return t;
+  };
+
+  cachedCyberpunkFloor = {
+    map: configureRepeat(diffCanvas),
+    emissiveMap: configureRepeat(emCanvas),
+  };
+  return cachedCyberpunkFloor;
+}
+
 /**
  * Dedicated builder for the 3x-expanded, 2-floor Team Death Match arenas (Vikendi TDM & Warehouse TDM).
  * - Silky-smooth analytical RampCollider staircases (zero bumps/snags walking UP or DOWN at full speed!)
@@ -2365,23 +2572,25 @@ export class TdmLevelBuilder {
     northBlueLight.userData.lowEndOptional = true;
     this.group.add(northBlueLight);
 
-    // Brighter high-clarity industrial materials
+    // Vibrant Neon Cyberpunk Retro Synthwave Floor + High-Clarity Industrial Materials!
+    const cyberFloor = getCyberpunkFloorTextures();
     const matFloor = new THREE.MeshStandardMaterial({
-      color: 0x54647a,
-      map: this.tex.wetAsphalt.map,
-      roughnessMap: this.tex.wetAsphalt.roughnessMap,
-      bumpMap: this.tex.wetAsphalt.bumpMap,
-      bumpScale: 0.03,
-      roughness: 0.56,
-      metalness: 0.24,
+      color: 0xffffff,
+      map: cyberFloor.map,
+      emissive: new THREE.Color(0xffffff),
+      emissiveMap: cyberFloor.emissiveMap,
+      emissiveIntensity: 0.78,
+      roughness: 0.36,
+      metalness: 0.28,
+      envMapIntensity: 1.25,
     });
     const matConcrete = new THREE.MeshStandardMaterial({
-      color: 0x74859c,
+      color: 0x7a8ca6,
       map: this.tex.grimyConcrete.map,
       roughnessMap: this.tex.grimyConcrete.roughnessMap,
       bumpMap: this.tex.grimyConcrete.bumpMap,
       bumpScale: 0.045,
-      roughness: 0.82,
+      roughness: 0.8,
       metalness: 0.1,
     });
     const matSteel = new THREE.MeshStandardMaterial({
@@ -2390,18 +2599,20 @@ export class TdmLevelBuilder {
       metalness: 0.48,
     });
     const matCorrugated = new THREE.MeshStandardMaterial({
-      color: 0x62758f,
+      color: 0x677a96,
       map: this.tex.corrugatedMetal.map,
       roughnessMap: this.tex.corrugatedMetal.roughnessMap,
-      roughness: 0.6,
-      metalness: 0.58,
+      roughness: 0.58,
+      metalness: 0.55,
     });
     const matGrate = new THREE.MeshStandardMaterial({
-      color: 0x748aa6,
+      color: 0x8298ba,
       map: this.tex.metalGrate.map,
       roughnessMap: this.tex.metalGrate.roughnessMap,
-      roughness: 0.48,
-      metalness: 0.56,
+      emissive: new THREE.Color(0x221b54),
+      emissiveIntensity: 0.35,
+      roughness: 0.46,
+      metalness: 0.52,
     });
     const matCrate = new THREE.MeshStandardMaterial({
       color: 0xe6d2b0,
@@ -2417,13 +2628,52 @@ export class TdmLevelBuilder {
     const matNeonPurple = new THREE.MeshBasicMaterial({ color: 0xd052ff });
     const matNeonMagenta = new THREE.MeshBasicMaterial({ color: 0xff46b8 });
 
-    // 1. Ground Basement Floor & High-Bay Warehouse Roof (11.5m tall!)
+    // 1. Neon Cyberpunk Retro Ground Floor & High-Bay Warehouse Roof (11.5m tall!)
     const roofH = 11.5;
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(HALF_W * 2 + 2, HALF_L * 2 + 2), matFloor);
     floor.rotation.x = -Math.PI / 2;
     floor.receiveShadow = true;
     this.group.add(floor);
     this.raycastMeshes.push(floor);
+
+    // Glowing Cyberpunk Synthwave Floor Lane Tracks, Spawn Borders & Central Reactor Floor Halo (batched = 0 extra draw calls!)
+    for (const [lx, lMat] of [
+      [-23.2, matNeonPurple],
+      [-12.8, matNeonBlue],
+      [0, matNeonMagenta],
+      [12.8, matNeonBlue],
+      [23.2, matNeonPurple],
+    ] as Array<[number, THREE.Material]>) {
+      const laneLine = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.02, HALF_L * 1.82), lMat);
+      laneLine.position.set(lx, 0.012, 0);
+      this.group.add(laneLine);
+    }
+    // Blue Spawn (South) Electric-Cyan & Red Spawn (North) Hot-Magenta floor threshold borders
+    for (const [sz, sMat] of [
+      [22.4, matNeonBlue],
+      [16.2, matNeonPurple],
+      [-16.2, matNeonPurple],
+      [-22.4, matNeonMagenta],
+    ] as Array<[number, THREE.Material]>) {
+      const crossLine = new THREE.Mesh(new THREE.BoxGeometry(HALF_W * 1.86, 0.02, 0.18), sMat);
+      crossLine.position.set(0, 0.012, sz);
+      this.group.add(crossLine);
+    }
+    // Glowing Double-Ring Cyberpunk Floor Frame around the Central Reactor Core
+    for (const [ringSize, rMat] of [
+      [5.4, matNeonMagenta],
+      [7.0, matNeonBlue],
+    ] as Array<[number, THREE.Material]>) {
+      const halfR = ringSize * 0.5;
+      for (const s of [-1, 1]) {
+        const hBar = new THREE.Mesh(new THREE.BoxGeometry(ringSize + 0.16, 0.024, 0.16), rMat);
+        hBar.position.set(0, 0.014, s * halfR);
+        this.group.add(hBar);
+        const vBar = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.024, ringSize + 0.16), rMat);
+        vBar.position.set(s * halfR, 0.014, 0);
+        this.group.add(vBar);
+      }
+    }
 
     const roof = new THREE.Mesh(new THREE.PlaneGeometry(HALF_W * 2 + 2, HALF_L * 2 + 2), matSteel);
     roof.rotation.x = Math.PI / 2;
