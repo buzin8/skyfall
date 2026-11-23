@@ -205,24 +205,11 @@ const PEER_PREFIX = 'skyfall-tdm-';
 const LEGACY_PEER_PREFIX = 'sunfire-tdm-';
 
 const ICE_CONFIG: RTCConfiguration = {
-  iceCandidatePoolSize: 6,
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
     { urls: 'stun:stun.cloudflare.com:3478' },
     { urls: 'stun:global.stun.twilio.com:3478' },
-    // Public OpenRelay TURN/TURNS fallback for friends behind strict home CGNAT / symmetric NAT / mobile 4G/5G
-    {
-      urls: [
-        'turn:openrelay.metered.ca:80',
-        'turn:openrelay.metered.ca:443',
-        'turn:openrelay.metered.ca:443?transport=tcp',
-        'turns:openrelay.metered.ca:443?transport=tcp',
-      ],
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
   ],
 };
 
@@ -440,8 +427,9 @@ export class MultiplayerManager {
     this.openBroadcastChannel(code);
     this.postLocal('*', { type: 'JOIN_REQ', playerId: this.localPlayerId, name });
 
-    // 2. Simultaneously connect over PeerJS WebRTC (with automatic legacy sunfire-tdm- fallback!)
+    // 2. Simultaneously connect over PeerJS WebRTC (with automatic legacy sunfire-tdm- fallback + 1s host-warmup retry!)
     let triedLegacyPrefix = false;
+    let retriedOnce = false;
     let activePrefix = PEER_PREFIX;
 
     try {
@@ -499,6 +487,18 @@ export class MultiplayerManager {
         if (conn.open) {
           onConnOpen();
         }
+        conn.on('iceStateChanged', (iceState) => {
+          if (this.connected || this.hostConn !== conn) return;
+          if (iceState === 'checking') {
+            this.cb.onStatus(`ESTABLISHING P2P LINK...`, false);
+          } else if (iceState === 'failed') {
+            this.clearJoinTimers();
+            this.leaveLobby(false);
+            this.cb.onError(
+              `Network firewall/NAT blocked direct P2P to "${code}". Try connecting via home Wi-Fi or ask the other player to host.`
+            );
+          }
+        });
         conn.on('data', (raw) => {
           if (this.activeClientLink === 'local') return;
           this.handleClientPacket(raw as WirePacket, 'webrtc');
@@ -521,10 +521,21 @@ export class MultiplayerManager {
       peer.on('error', (err) => {
         if (this.peer !== peer || this.connected || this.activeClientLink === 'local') return;
         if (err?.type === 'peer-unavailable') {
-          // If host is still running an older cached tab with sunfire-tdm-, automatically try it!
+          // 1) If host is still running an older cached tab with sunfire-tdm-, automatically try it!
           if (!triedLegacyPrefix && activePrefix === PEER_PREFIX) {
             triedLegacyPrefix = true;
             connectToHost(LEGACY_PEER_PREFIX);
+            return;
+          }
+          // 2) Give the host 1.5s to finish registering on PeerJS if they literally just clicked HOST LOBBY
+          if (!retriedOnce) {
+            retriedOnce = true;
+            this.cb.onStatus(`WAITING FOR HOST ${code}...`, false);
+            window.setTimeout(() => {
+              if (this.peer === peer && !this.connected && this.activeClientLink !== 'local') {
+                connectToHost(PEER_PREFIX);
+              }
+            }, 1500);
             return;
           }
           this.clearJoinTimers();

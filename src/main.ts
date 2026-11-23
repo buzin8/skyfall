@@ -1204,6 +1204,7 @@ class SkyfallGame {
   private setTdmJoinButtonBusy(busy: boolean): void {
     const btn = document.getElementById('btn-tdm-join') as HTMLButtonElement | null;
     if (!btn) return;
+    btn.disabled = busy;
     btn.classList.toggle('connecting', busy);
     btn.textContent = busy ? 'CONNECTING...' : 'JOIN LOBBY';
     if (!busy) {
