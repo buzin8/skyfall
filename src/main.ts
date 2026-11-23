@@ -248,8 +248,9 @@ class SkyfallGame {
   private fpsAccum = 0;
   private fpsFrames = 0;
   private spottingTimer = 0;
-  private bloomEnabled = true; // Half-res selective HDR bloom on by default for vibrant glowing atmosphere at 60 FPS!
-  private readonly targetFrameMs = 1000 / 60 - 1.5; // Smooth 60 FPS cap without skipping 60Hz vblanks!
+  private bloomEnabled = true; // Half-res selective HDR bloom on by default for vibrant glowing atmosphere!
+  private fpsLimit: 30 | 60 | 120 | 0 = 60;
+  private targetFrameMs = 1000 / 60 - 1.5; // Configurable FPS cap (30 / 60 / 120 / Unlimited)
 
   private menuOverlay = document.getElementById('menu-overlay')!;
   private tdmOverlay = document.getElementById('tdm-lobby-overlay')!;
@@ -278,7 +279,7 @@ class SkyfallGame {
     this.scene = new THREE.Scene();
     this.envFactory = buildDaylightEnvironment(this.renderer);
     this.envFoundry = buildIndustrialEnvironment(this.renderer);
-    this.camera = new THREE.PerspectiveCamera(74, window.innerWidth / window.innerHeight, 0.08, 220);
+    this.camera = new THREE.PerspectiveCamera(74, window.innerWidth / window.innerHeight, 0.08, 450);
     this.scene.add(this.camera);
 
     // 3. Half-res Selective HDR Bloom Post-Processing
@@ -310,6 +311,15 @@ class SkyfallGame {
     // Auto-select fast 60 FPS pipeline on laptops without a dedicated GPU (Intel UHD/Iris, integrated Radeon, software renderers)
     if (this.detectIntegratedGpu()) {
       this.applyGraphicsPreset('perf');
+    }
+
+    // Restore saved FPS target if previously selected by the player
+    const savedFpsRaw = localStorage.getItem('skyfall_fps_limit');
+    if (savedFpsRaw !== null) {
+      const savedFps = Number(savedFpsRaw);
+      if (savedFps === 30 || savedFps === 60 || savedFps === 120 || savedFps === 0) {
+        this.applyFpsLimit(savedFps, false);
+      }
     }
 
     window.addEventListener('resize', () => {
@@ -359,8 +369,19 @@ class SkyfallGame {
       this.renderer.shadowMap.needsUpdate = true;
     }
 
-    document.querySelectorAll<HTMLButtonElement>('#graphics-pills .pill').forEach((b) => {
+    document.querySelectorAll<HTMLButtonElement>('[data-gfx]').forEach((b) => {
       b.classList.toggle('active', b.dataset.gfx === preset);
+    });
+  }
+
+  private applyFpsLimit(limit: 30 | 60 | 120 | 0, save = true): void {
+    this.fpsLimit = limit;
+    this.targetFrameMs = limit === 0 ? 0 : 1000 / limit - 1.5;
+    if (save) {
+      localStorage.setItem('skyfall_fps_limit', String(limit));
+    }
+    document.querySelectorAll<HTMLButtonElement>('[data-fps]').forEach((b) => {
+      b.classList.toggle('active', Number(b.dataset.fps) === limit);
     });
   }
 
@@ -500,11 +521,20 @@ class SkyfallGame {
       });
     });
 
-    document.querySelectorAll<HTMLButtonElement>('#graphics-pills .pill').forEach((btn) => {
+    document.querySelectorAll<HTMLButtonElement>('[data-gfx]').forEach((btn) => {
       btn.addEventListener('click', () => {
         this.userPickedGraphics = true;
         const preset = (btn.dataset.gfx as 'bloom' | 'perf' | 'laptop') || 'perf';
         this.applyGraphicsPreset(preset);
+      });
+    });
+
+    document.querySelectorAll<HTMLButtonElement>('[data-fps]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const val = Number(btn.dataset.fps);
+        if (val === 30 || val === 60 || val === 120 || val === 0) {
+          this.applyFpsLimit(val);
+        }
       });
     });
 
@@ -2715,8 +2745,8 @@ class SkyfallGame {
   private loop = (now: number): void => {
     requestAnimationFrame(this.loop);
 
-    // 60 FPS frame pacer: locks 120Hz/144Hz monitors smoothly to 60 FPS while never skipping 60Hz vblanks
-    if (now - this.lastRenderTime < this.targetFrameMs) {
+    // Configurable FPS frame pacer (30 / 60 / 120 / Unlimited)
+    if (this.targetFrameMs > 0 && now - this.lastRenderTime < this.targetFrameMs) {
       return;
     }
     this.lastRenderTime = now;
@@ -2728,7 +2758,8 @@ class SkyfallGame {
     this.fpsAccum += dt;
     this.fpsFrames += 1;
     if (this.fpsAccum >= 0.4) {
-      this.hud.updateFps(Math.min(60, Math.round(this.fpsFrames / this.fpsAccum)));
+      const measuredFps = Math.round(this.fpsFrames / this.fpsAccum);
+      this.hud.updateFps(this.fpsLimit > 0 ? Math.min(this.fpsLimit, measuredFps) : measuredFps);
       this.fpsAccum = 0;
       this.fpsFrames = 0;
     }
@@ -2736,8 +2767,8 @@ class SkyfallGame {
     // Animated burning braziers, flickering fluorescent tubes, exhaust fan & rising embers
     this.level.updateAtmosphere(dt, elapsed);
 
-    // Universal Auto-60-FPS Laptop Booster: steps down Bloom -> Direct 1.0 DPR -> Laptop/No-GPU if FPS drops below ~38!
-    if (!this.userPickedGraphics && !this.paused && this.graphicsPreset !== 'laptop') {
+    // Universal Auto-60-FPS Booster: steps down Bloom -> Direct 1.0 DPR -> Low End Device if FPS drops below ~38 (skip if user intentionally capped 30 FPS!)
+    if (!this.userPickedGraphics && !this.paused && this.graphicsPreset !== 'laptop' && this.fpsLimit !== 30) {
       if (dt > 0.0265) {
         this.tdmSlowFrameAccum += dt;
         if (this.tdmSlowFrameAccum > 1.35) {
@@ -2747,7 +2778,7 @@ class SkyfallGame {
             this.hud.showToast('AUTO-BOOST: MAX 60 FPS MODE ENABLED', 'heal', 2.0);
           } else {
             this.applyGraphicsPreset('laptop');
-            this.hud.showToast('AUTO-BOOST: LAPTOP NO-GPU MODE ENABLED', 'heal', 2.0);
+            this.hud.showToast('AUTO-BOOST: LOW END DEVICE MODE ENABLED', 'heal', 2.0);
           }
         }
       } else {

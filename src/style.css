@@ -1337,6 +1337,45 @@ body {
   color: #eef5fc;
 }
 
+.tdm-perf-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 18px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  border-radius: 8px;
+  background: rgba(14, 24, 38, 0.72);
+  border: 1px solid rgba(56, 232, 255, 0.22);
+}
+
+.tdm-perf-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.tdm-perf-label {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  color: #88d8f8;
+}
+
+.tdm-perf-bar .pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tdm-perf-bar .pill {
+  padding: 5px 10px;
+  font-size: 11px;
+}
+
 .tdm-room-header {
   display: flex;
   flex-wrap: wrap;

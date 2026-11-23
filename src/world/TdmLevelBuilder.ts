@@ -1129,6 +1129,7 @@ export class TdmLevelBuilder {
       `,
     });
     this.group.add(new THREE.Mesh(skyGeo, skyMat));
+    scene.background = new THREE.Color('#2c7ad6');
     scene.fog = new THREE.FogExp2(0x8bb9e6, 0.0032);
 
     // Crisp alpine winter sunlight + glacial-blue bounce + vivid cyan/crimson/amber rim accents!

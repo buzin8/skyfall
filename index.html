@@ -321,7 +321,17 @@
               <div class="pill-row" id="graphics-pills">
                 <button class="pill active" data-gfx="bloom">VIBRANT BLOOM</button>
                 <button class="pill" data-gfx="perf">MAX 60 FPS</button>
-                <button class="pill" data-gfx="laptop">LAPTOP / NO-GPU</button>
+                <button class="pill" data-gfx="laptop">LOW END DEVICE</button>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <label>FPS Target</label>
+              <div class="pill-row" id="fps-pills">
+                <button class="pill" data-fps="30" type="button">30 FPS</button>
+                <button class="pill active" data-fps="60" type="button">60 FPS</button>
+                <button class="pill" data-fps="120" type="button">120 FPS</button>
+                <button class="pill" data-fps="0" type="button">UNLIMITED</button>
               </div>
             </div>
 
@@ -346,6 +356,27 @@
         </div>
 
         <div id="tdm-error" class="tdm-error hidden"></div>
+
+        <!-- Quick Graphics & FPS Selector (always accessible while joining or waiting in TDM!) -->
+        <div class="tdm-perf-bar">
+          <div class="tdm-perf-group">
+            <span class="tdm-perf-label">GRAPHICS</span>
+            <div class="pill-row">
+              <button class="pill active" data-gfx="bloom" type="button">VIBRANT BLOOM</button>
+              <button class="pill" data-gfx="perf" type="button">MAX 60 FPS</button>
+              <button class="pill" data-gfx="laptop" type="button">LOW END DEVICE</button>
+            </div>
+          </div>
+          <div class="tdm-perf-group">
+            <span class="tdm-perf-label">FPS LIMIT</span>
+            <div class="pill-row">
+              <button class="pill" data-fps="30" type="button">30 FPS</button>
+              <button class="pill active" data-fps="60" type="button">60 FPS</button>
+              <button class="pill" data-fps="120" type="button">120 FPS</button>
+              <button class="pill" data-fps="0" type="button">MAX</button>
+            </div>
+          </div>
+        </div>
 
         <!-- Step 1: Enter Name & Host or Join with Team Code -->
         <div id="tdm-entry-view">
