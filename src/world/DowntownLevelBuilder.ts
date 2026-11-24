@@ -649,6 +649,7 @@ export class DowntownLevelBuilder {
       t.wrapT = THREE.RepeatWrapping;
       t.repeat.set(rx, ry);
       t.needsUpdate = true;
+      this.dTex.trackRoadClone(t);
       return new THREE.MeshStandardMaterial({
         color: 0xffffff,
         map: t,

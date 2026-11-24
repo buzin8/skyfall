@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { smoothGeometryNormals } from '../utils/MeshSmoothing';
+import { getDowntownTextures } from './DowntownTextures';
 
 export const DOWNTOWN_CAR_GLBS = [
   'taxi',
@@ -76,39 +77,47 @@ export function loadDowntownGlb(relPath: string, creaseAngle = 52): Promise<Load
   const pending = inflightCache.get(relPath);
   if (pending) return pending;
 
-  const url = `/models/downtown/${relPath}`;
+  const baseUrl = `/models/downtown/${relPath}`;
   const promise = new Promise<LoadedGlbTemplate | null>((resolve) => {
-    gltfLoader.load(
-      url,
-      (gltf) => {
-        gltf.scene.updateMatrixWorld(true);
-        gltf.scene.traverse((obj) => {
-          const mesh = obj as THREE.Mesh;
-          if (mesh.isMesh && mesh.geometry) {
-            smoothGeometryNormals(mesh.geometry, creaseAngle);
-            mesh.frustumCulled = true;
+    const attempt = (retriesLeft: number) => {
+      const url = retriesLeft === 2 ? baseUrl : `${baseUrl}?r=${2 - retriesLeft}`;
+      gltfLoader.load(
+        url,
+        (gltf) => {
+          gltf.scene.updateMatrixWorld(true);
+          gltf.scene.traverse((obj) => {
+            const mesh = obj as THREE.Mesh;
+            if (mesh.isMesh && mesh.geometry) {
+              smoothGeometryNormals(mesh.geometry, creaseAngle);
+              mesh.frustumCulled = true;
+            }
+          });
+          const rawBox = new THREE.Box3().setFromObject(gltf.scene);
+          const rawSize = new THREE.Vector3();
+          rawBox.getSize(rawSize);
+          const tpl: LoadedGlbTemplate = {
+            scene: gltf.scene,
+            animations: gltf.animations || [],
+            rawBox,
+            rawSize,
+          };
+          templateCache.set(relPath, tpl);
+          inflightCache.delete(relPath);
+          resolve(tpl);
+        },
+        undefined,
+        (err) => {
+          if (retriesLeft > 0) {
+            window.setTimeout(() => attempt(retriesLeft - 1), (3 - retriesLeft) * 700);
+            return;
           }
-        });
-        const rawBox = new THREE.Box3().setFromObject(gltf.scene);
-        const rawSize = new THREE.Vector3();
-        rawBox.getSize(rawSize);
-        const tpl: LoadedGlbTemplate = {
-          scene: gltf.scene,
-          animations: gltf.animations || [],
-          rawBox,
-          rawSize,
-        };
-        templateCache.set(relPath, tpl);
-        inflightCache.delete(relPath);
-        resolve(tpl);
-      },
-      undefined,
-      (err) => {
-        console.warn(`[DowntownGlbAssets] Failed loading ${url}:`, err);
-        inflightCache.delete(relPath);
-        resolve(null);
-      }
-    );
+          console.warn(`[DowntownGlbAssets] Failed loading ${baseUrl}:`, err);
+          inflightCache.delete(relPath);
+          resolve(null);
+        }
+      );
+    };
+    attempt(2);
   });
 
   inflightCache.set(relPath, promise);
@@ -235,6 +244,8 @@ export function preloadDowntownGlbs(): void {
   if (preloadStarted) return;
   preloadStarted = true;
 
+  // Preload all 11 photorealistic Manhattan building/billboard/road JPG textures right alongside the 3D GLBs!
+  getDowntownTextures();
   for (const c of DOWNTOWN_CAR_GLBS) void loadDowntownGlb(`cars/${c}.glb`, 48);
   for (const n of DOWNTOWN_NPC_GLBS) void loadDowntownGlb(`npcs/${n}.glb`, 62);
   for (const t of DOWNTOWN_TREE_GLBS) void loadDowntownGlb(`trees/${t}.glb`, 45);

@@ -24,6 +24,7 @@ export interface DowntownTexturePack {
   storefrontMasonry: FacadeTexPair;
   roadAvenue: THREE.CanvasTexture;
   roadCross: THREE.CanvasTexture;
+  trackRoadClone: (clone: THREE.CanvasTexture) => void;
   roadOnlyDecal: THREE.CanvasTexture;
   crosswalk: THREE.CanvasTexture;
   sidewalk: THREE.CanvasTexture;
@@ -55,13 +56,25 @@ function createCanvasTex(
   return { canvas, ctx, tex };
 }
 
-function loadImage(url: string): Promise<HTMLImageElement> {
+function loadImage(url: string, retries = 3): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => resolve(img);
-    img.onerror = reject;
-    img.src = url;
+    const attempt = (left: number) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => resolve(img);
+      img.onerror = (err) => {
+        if (left > 0) {
+          const delay = (retries - left + 1) * 750;
+          const sep = url.includes('?') ? '&' : '?';
+          window.setTimeout(() => attempt(left - 1), delay);
+          void sep;
+        } else {
+          reject(err);
+        }
+      };
+      img.src = left === retries ? url : `${url}?r=${retries - left}`;
+    };
+    attempt(retries);
   });
 }
 
@@ -254,7 +267,11 @@ function createVerticalBladeSign(text: string, bgHex: string, glowHex: string, b
   return tex;
 }
 
-function createPhotoRoadTexture(imgPromise: Promise<HTMLImageElement>, rotated90: boolean): THREE.CanvasTexture {
+function createPhotoRoadTexture(
+  imgPromise: Promise<HTMLImageElement>,
+  rotated90: boolean,
+  onDecoded?: () => void
+): THREE.CanvasTexture {
   const { ctx, tex } = createCanvasTex(512, 512, true, 8);
   ctx.fillStyle = '#141c28';
   ctx.fillRect(0, 0, 512, 512);
@@ -272,6 +289,7 @@ function createPhotoRoadTexture(imgPromise: Promise<HTMLImageElement>, rotated90
       }
       ctx.restore();
       tex.needsUpdate = true;
+      onDecoded?.();
     })
     .catch(() => {});
 
@@ -548,6 +566,14 @@ export function getDowntownTextures(): DowntownTexturePack {
   ];
 
   const park = createParkTextures();
+  const roadClones: THREE.CanvasTexture[] = [];
+  let roadDecoded = false;
+  const markRoadClonesDirty = () => {
+    roadDecoded = true;
+    for (const c of roadClones) {
+      c.needsUpdate = true;
+    }
+  };
 
   cachedPack = {
     wideBillboards,
@@ -556,8 +582,12 @@ export function getDowntownTextures(): DowntownTexturePack {
     facades,
     storefrontModern,
     storefrontMasonry,
-    roadAvenue: createPhotoRoadTexture(pRoad, false),
-    roadCross: createPhotoRoadTexture(pRoad, true),
+    roadAvenue: createPhotoRoadTexture(pRoad, false, markRoadClonesDirty),
+    roadCross: createPhotoRoadTexture(pRoad, true, markRoadClonesDirty),
+    trackRoadClone: (clone: THREE.CanvasTexture) => {
+      roadClones.push(clone);
+      if (roadDecoded) clone.needsUpdate = true;
+    },
     roadOnlyDecal: createRoadOnlyDecal(),
     crosswalk: createRealisticCrosswalk(),
     sidewalk: createManhattanSidewalk(),
