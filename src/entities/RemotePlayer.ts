@@ -1,7 +1,8 @@
 import * as THREE from 'three';
-import { LobbyTeam } from '../types';
+import { AABB, LobbyTeam, RampCollider } from '../types';
 import { TextureLibrary } from '../textures/ProceduralTextures';
 import { AgentRig, buildAgentRig, solveTwoBoneArmIK } from './AgentModel';
+import { depenetrateFromColliders, MapBounds2D, measureForwardWallClearance } from '../world/CollisionUtils';
 
 function lerpAngle(a: number, b: number, t: number): number {
   let diff = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI;
@@ -50,6 +51,7 @@ export class RemotePlayer {
   private muzzleFlashTimer = 0;
   private hitFlashTimer = 0;
   private recoilKick = 0;
+  private wallTuck = 0;
 
   // Articulated 2-stage ragdoll collapse state (zero floor-clipping!)
   private deathAnim = 0;
@@ -289,7 +291,12 @@ export class RemotePlayer {
     return out.set(this.pos.x, this.pos.y + (this.crouchAmount > 0.4 ? 1.45 : 1.94), this.pos.z);
   }
 
-  public update(dt: number): void {
+  public update(
+    dt: number,
+    colliders?: AABB[],
+    mapBounds?: MapBounds2D,
+    ramps?: RampCollider[]
+  ): void {
     if (this.spottedTimer > 0) this.spottedTimer = Math.max(0, this.spottedTimer - dt);
 
     if (this.muzzleFlashTimer > 0) {
@@ -308,7 +315,7 @@ export class RemotePlayer {
     if (!this.alive) {
       this.spawnShield = 0;
       this.shieldAuraGroup.visible = false;
-      this.updateDeathRagdoll(dt);
+      this.updateDeathRagdoll(dt, colliders, mapBounds);
       return;
     }
 
@@ -341,6 +348,11 @@ export class RemotePlayer {
     this.pos.z += (predZ - this.pos.z) * posAlpha;
     this.yaw = lerpAngle(this.yaw, this.targetYaw, 1 - Math.exp(-20 * dt));
 
+    // Guarantee dead-reckoning / interpolation NEVER clips a remote player or bot inside solid walls/cover!
+    if (colliders && colliders.length > 0) {
+      depenetrateFromColliders(this.pos, 0.54, this.crouching ? 1.26 : 1.78, colliders, mapBounds, 2, 0.08);
+    }
+
     const invDt = dt > 1e-4 ? 1 / dt : 0;
     const vx = (this.pos.x - prevX) * invDt;
     const vz = (this.pos.z - prevZ) * invDt;
@@ -357,6 +369,25 @@ export class RemotePlayer {
     this.idlePhase += dt * 2.4;
     this.recoilKick = Math.max(0, this.recoilKick - dt * 9.5);
     const moveSpeed = Math.hypot(localFwd, localLeft);
+
+    // Real-time 3rd-person CQB wall-proximity barrel tuck (prevents rifle barrel from EVER poking through walls!)
+    let targetWallTuck = 0;
+    if (colliders && colliders.length > 0) {
+      const chestY = this.pos.y + THREE.MathUtils.lerp(1.32, 0.94, this.crouchAmount);
+      const clearance = measureForwardWallClearance(
+        this.pos.x,
+        chestY,
+        this.pos.z,
+        sinY,
+        cosY,
+        1.18,
+        colliders,
+        ramps
+      );
+      targetWallTuck = THREE.MathUtils.clamp((1.16 - clearance) / 0.54, 0, 1);
+    }
+    const tuckRate = targetWallTuck > this.wallTuck ? 22 : 12;
+    this.wallTuck = THREE.MathUtils.lerp(this.wallTuck, targetWallTuck, 1 - Math.exp(-tuckRate * dt));
 
     if (this.rig.isSkinned && this.rig.mixer && this.rig.actions) {
       const expSmooth = 1 - Math.exp(-10 * dt);
@@ -388,6 +419,7 @@ export class RemotePlayer {
       const aimPitch = THREE.MathUtils.clamp(-this.pitch * 0.34, -0.25, 0.25);
       // Pivot cleanly around the right shoulder buttstock anchor so the rifle NEVER swings off-shoulder!
       const stockYComp = -0.2 * Math.sin(aimPitch);
+      const wt = this.wallTuck;
 
       if (this.rig.akmGroup && this.rig.scarGroup) {
         this.rig.akmGroup.visible = this.weaponSlot !== 1;
@@ -395,13 +427,13 @@ export class RemotePlayer {
       }
 
       this.rig.weaponPivot.position.set(
-        -0.165 + strideBobX,
-        1.335 + strideBobY + stockYComp - this.crouchAmount * 0.055,
-        0.265 - this.recoilKick * 0.042
+        -0.165 + strideBobX + wt * 0.05,
+        1.335 + strideBobY + stockYComp - this.crouchAmount * 0.055 + wt * 0.06,
+        0.265 - this.recoilKick * 0.042 - wt * 0.24
       );
       this.rig.weaponPivot.rotation.set(
-        runCant + aimPitch - this.recoilKick * 0.1,
-        0,
+        runCant + aimPitch * (1 - wt * 0.7) - this.recoilKick * 0.1 - wt * 0.96,
+        wt * 0.22,
         0
       );
 
@@ -540,7 +572,7 @@ export class RemotePlayer {
     }
   }
 
-  private updateDeathRagdoll(dt: number): void {
+  private updateDeathRagdoll(dt: number, colliders?: AABB[], mapBounds?: MapBounds2D): void {
     const prevAnim = this.deathAnim;
     this.deathAnim = Math.min(1, this.deathAnim + dt * 1.48);
     const deltaSlide =
@@ -550,6 +582,9 @@ export class RemotePlayer {
     if (deltaSlide > 0.0001) {
       this.pos.x += this.killImpulse.x * deltaSlide;
       this.pos.z += this.killImpulse.z * deltaSlide;
+      if (colliders && colliders.length > 0) {
+        depenetrateFromColliders(this.pos, 0.54, 1.0, colliders, mapBounds, 2, 0.08);
+      }
       this.rig.root.position.copy(this.pos);
     }
 

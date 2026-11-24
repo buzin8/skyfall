@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import { AABB, RampCollider, ZoneDef } from '../types';
 import { SoundEngine } from '../audio/SoundEngine';
+import { depenetrateFromColliders } from '../world/CollisionUtils';
 
 const STAND_EYE_HEIGHT = 1.66;
 const CROUCH_EYE_HEIGHT = 1.08;
-const PLAYER_RADIUS = 0.46;
+const PLAYER_RADIUS = 0.54;
 const STAND_HEIGHT = 1.82;
 const CROUCH_HEIGHT = 1.24;
 const GRAVITY = 23.0;
@@ -260,6 +261,90 @@ export class PlayerController {
       this.yaw + recoilYawOffset + sx,
       0
     );
+  }
+
+  /**
+   * Prevents the local player from ever overlapping any alive teammate, enemy, or AI bot
+   * across all Solo & TDM maps while re-clamping strictly outside solid walls and staircases!
+   */
+  public resolveCharacterOverlap(
+    others: Array<{ x: number; y: number; z: number }>,
+    colliders: AABB[],
+    mapBounds?: { minX: number; maxX: number; minZ: number; maxZ: number },
+    ramps?: RampCollider[],
+    camera?: THREE.PerspectiveCamera
+  ): void {
+    if (!this.alive || others.length === 0) return;
+    const minDist = 1.04;
+    const minDistSq = minDist * minDist;
+    let moved = false;
+
+    for (let pass = 0; pass < 2; pass++) {
+      let pushed = false;
+      for (let i = 0; i < others.length; i++) {
+        const o = others[i];
+        if (Math.abs(o.y - this.pos.y) > 1.55) continue;
+        let dx = this.pos.x - o.x;
+        let dz = this.pos.z - o.z;
+        const dSq = dx * dx + dz * dz;
+        if (dSq >= minDistSq) continue;
+
+        let dist = Math.sqrt(dSq);
+        if (dist < 1e-4) {
+          dx = 1;
+          dz = 0;
+          dist = 1;
+        }
+        const nx = dx / dist;
+        const nz = dz / dist;
+        const overlap = minDist - dist;
+        this.pos.x += nx * overlap;
+        this.pos.z += nz * overlap;
+
+        // Remove velocity component pushing further into the other character
+        const vn = this.vel.x * nx + this.vel.z * nz;
+        if (vn < 0) {
+          this.vel.x -= nx * vn;
+          this.vel.z -= nz * vn;
+        }
+        pushed = true;
+        moved = true;
+      }
+      if (!pushed) break;
+
+      // Re-clamp immediately against solid walls so character separation can NEVER shove player inside a wall!
+      const bodyHeight = this.crouching ? CROUCH_HEIGHT : STAND_HEIGHT;
+      depenetrateFromColliders(this.pos, PLAYER_RADIUS, bodyHeight, colliders, mapBounds, 3, 0.08);
+    }
+
+    if (moved) {
+      // Also guard ramp undersides if pushed sideways near stairs
+      const bodyHeight = this.crouching ? CROUCH_HEIGHT : STAND_HEIGHT;
+      if (ramps) {
+        for (const r of ramps) {
+          if (this.pos.x + PLAYER_RADIUS < r.minX || this.pos.x - PLAYER_RADIUS > r.maxX) continue;
+          if (this.pos.z + PLAYER_RADIUS < r.minZ || this.pos.z - PLAYER_RADIUS > r.maxZ) continue;
+          const t = THREE.MathUtils.clamp((this.pos.z - r.minZ) / Math.max(0.001, r.maxZ - r.minZ), 0, 1);
+          const ry = THREE.MathUtils.lerp(r.yAtMinZ, r.yAtMaxZ, t);
+          if (this.pos.y < ry - 0.85 && this.pos.y + bodyHeight > ry - 0.24) {
+            const penL = this.pos.x + PLAYER_RADIUS - r.minX;
+            const penR = r.maxX - (this.pos.x - PLAYER_RADIUS);
+            const penB = this.pos.z + PLAYER_RADIUS - r.minZ;
+            const penF = r.maxZ - (this.pos.z - PLAYER_RADIUS);
+            const minP = Math.min(penL, penR, penB, penF);
+            if (minP === penL) this.pos.x = r.minX - PLAYER_RADIUS - 0.002;
+            else if (minP === penR) this.pos.x = r.maxX + PLAYER_RADIUS + 0.002;
+            else if (minP === penB) this.pos.z = r.minZ - PLAYER_RADIUS - 0.002;
+            else this.pos.z = r.maxZ + PLAYER_RADIUS + 0.002;
+          }
+        }
+      }
+      depenetrateFromColliders(this.pos, PLAYER_RADIUS, bodyHeight, colliders, mapBounds, 3, 0.08);
+      if (camera) {
+        camera.position.x = this.pos.x;
+        camera.position.z = this.pos.z;
+      }
+    }
   }
 
   private sampleRampHeight(x: number, z: number, curY: number, ramps?: RampCollider[]): number | null {

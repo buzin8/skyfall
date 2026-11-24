@@ -1,7 +1,13 @@
 import * as THREE from 'three';
-import { AABB, Difficulty, SmokeCloud, Team, Waypoint } from '../types';
+import { AABB, Difficulty, RampCollider, SmokeCloud, Team, Waypoint } from '../types';
 import { TextureLibrary } from '../textures/ProceduralTextures';
 import { AgentRig, AgentVisualStyle, buildAgentRig, solveTwoBoneArmIK } from './AgentModel';
+import {
+  depenetrateFromColliders,
+  MapBounds2D,
+  measureForwardWallClearance,
+  raycastCollidersDist,
+} from '../world/CollisionUtils';
 
 export interface AgentFireEvent {
   attackerId: string;
@@ -65,6 +71,7 @@ export class TacticalAgent {
   private walkPhase = Math.random() * Math.PI * 2;
   private idlePhase = Math.random() * Math.PI * 2;
   private recoilKick = 0;
+  private wallTuck = 0;
   private openingHoldTimer = 0;
   private visionTimer = Math.random() * 0.1;
   private cachedTargetPos: THREE.Vector3 | null = null;
@@ -379,7 +386,9 @@ export class TacticalAgent {
     smokes: SmokeCloud[],
     difficulty: Difficulty,
     roundActive: boolean,
-    onFire: (ev: AgentFireEvent) => void
+    onFire: (ev: AgentFireEvent) => void,
+    mapBounds?: MapBounds2D,
+    ramps?: RampCollider[]
   ): void {
     // Hit damage flash tint decay
     const baseEmissive = this.rig.isSkinned ? 0.25 : 0.09;
@@ -454,13 +463,15 @@ export class TacticalAgent {
           );
         }
 
-        // Subtle momentum slide along bullet impact vector during the drop
+        // Subtle momentum slide along bullet impact vector during the drop (clamped outside walls!)
         const slideEase = 1 - Math.pow(1 - Math.min(1, t / 0.88), 2.2);
-        this.rig.root.position.set(
-          this.pos.x + this.killImpulse.x * slideEase * this.killSlideDist,
-          this.pos.y,
-          this.pos.z + this.killImpulse.z * slideEase * this.killSlideDist
-        );
+        const ragPos = {
+          x: this.pos.x + this.killImpulse.x * slideEase * this.killSlideDist,
+          y: this.pos.y,
+          z: this.pos.z + this.killImpulse.z * slideEase * this.killSlideDist,
+        };
+        depenetrateFromColliders(ragPos, 0.56, 1.0, colliders, mapBounds, 2, 0.08);
+        this.rig.root.position.set(ragPos.x, ragPos.y, ragPos.z);
 
         // Hard world-space floor contact clamp so hands, forearms & head NEVER sink inside the ground!
         this.enforceRagdollFloorContact();
@@ -522,7 +533,7 @@ export class TacticalAgent {
 
       if (this.team === 'enemy' && playerAlive) {
         const dist = myEye.distanceTo(playerEye);
-        if (dist < 42 && hasClearSight(myEye, playerEye, levelMeshes, smokes)) {
+        if (dist < 42 && hasClearSight(myEye, playerEye, levelMeshes, smokes, colliders)) {
           foundDist = dist;
           foundPos = playerPos.clone();
           foundAim = playerEye.clone().add(new THREE.Vector3(0, -0.22, 0));
@@ -533,7 +544,7 @@ export class TacticalAgent {
         if (!other.alive || other.team === this.team) continue;
         const otherEye = other.getEyePosition();
         const dist = myEye.distanceTo(otherEye);
-        if (dist < foundDist && dist < 40 && hasClearSight(myEye, otherEye, levelMeshes, smokes)) {
+        if (dist < foundDist && dist < 40 && hasClearSight(myEye, otherEye, levelMeshes, smokes, colliders)) {
           foundDist = dist;
           foundPos = other.pos.clone();
           foundAim = otherEye.clone().add(new THREE.Vector3(0, -0.22, 0));
@@ -703,6 +714,47 @@ export class TacticalAgent {
       }
     }
 
+    // Hard character-to-character horizontal separation (bots NEVER overlap each other or the player!)
+    const minCharDist = 1.04;
+    const minCharDistSq = minCharDist * minCharDist;
+    for (const other of allAgents) {
+      if (other === this || !other.alive) continue;
+      if (Math.abs(other.pos.y - this.pos.y) > 1.55) continue;
+      let ox = this.pos.x - other.pos.x;
+      let oz = this.pos.z - other.pos.z;
+      const dSq = ox * ox + oz * oz;
+      if (dSq < minCharDistSq) {
+        let d = Math.sqrt(dSq);
+        if (d < 1e-4) {
+          ox = 1;
+          oz = 0;
+          d = 1;
+        }
+        const push = (minCharDist - d) * 0.55;
+        this.pos.x += (ox / d) * push;
+        this.pos.z += (oz / d) * push;
+      }
+    }
+    if (playerAlive && Math.abs(playerPos.y - this.pos.y) <= 1.55) {
+      let ox = this.pos.x - playerPos.x;
+      let oz = this.pos.z - playerPos.z;
+      const dSq = ox * ox + oz * oz;
+      if (dSq < minCharDistSq) {
+        let d = Math.sqrt(dSq);
+        if (d < 1e-4) {
+          ox = 1;
+          oz = 0;
+          d = 1;
+        }
+        const push = (minCharDist - d) * 0.65;
+        this.pos.x += (ox / d) * push;
+        this.pos.z += (oz / d) * push;
+      }
+    }
+
+    // Re-clamp strictly outside solid walls & arena perimeter after any movement or character separation!
+    depenetrateFromColliders(this.pos, 0.56, 1.78, colliders, mapBounds, 3, 0.08);
+
     // Measure actual post-collision velocity in agent-local space (prevents running in place & enables real strafe blending!)
     const invDt = dt > 1e-4 ? 1 / dt : 0;
     const vx = (this.pos.x - prevX) * invDt;
@@ -711,6 +763,22 @@ export class TacticalAgent {
     const cosY = Math.cos(this.yaw);
     const localFwd = vx * sinY + vz * cosY; // Forward (+Z in local space)
     const localLeft = vx * cosY - vz * sinY; // Left (+X in local space)
+
+    // Real-time 3rd-person CQB wall-proximity barrel tuck so bot rifles NEVER poke through walls!
+    const chestY = this.pos.y + THREE.MathUtils.lerp(1.32, 0.94, this.crouchAmount);
+    const clearance = measureForwardWallClearance(
+      this.pos.x,
+      chestY,
+      this.pos.z,
+      sinY,
+      cosY,
+      1.18,
+      colliders,
+      ramps
+    );
+    const targetWallTuck = THREE.MathUtils.clamp((1.16 - clearance) / 0.54, 0, 1);
+    const tuckRate = targetWallTuck > this.wallTuck ? 22 : 12;
+    this.wallTuck = THREE.MathUtils.lerp(this.wallTuck, targetWallTuck, 1 - Math.exp(-tuckRate * dt));
 
     this.rig.root.position.copy(this.pos);
     this.rig.root.rotation.set(0, this.yaw, 0);
@@ -750,8 +818,8 @@ export class TacticalAgent {
   }
 
   private moveWithCollision(dx: number, dz: number, colliders: AABB[]): void {
-    const r = 0.44;
-    const h = 1.75;
+    const r = 0.56;
+    const h = 1.78;
 
     this.pos.x += dx;
     for (const b of colliders) {
@@ -851,14 +919,15 @@ export class TacticalAgent {
       const strideBobY = Math.sin(this.idlePhase * (spd > 0.4 ? 4.0 : 1.0)) * (spd > 0.4 ? 0.014 : 0.006);
       const strideBobX = Math.cos(this.idlePhase * 2.0) * (spd > 0.4 ? 0.008 : 0.002);
       const runCant = wRun * 0.06;
+      const wt = this.wallTuck;
       this.rig.weaponPivot.position.set(
-        -0.165 + strideBobX,
-        1.335 + strideBobY - this.crouchAmount * 0.055,
-        0.265 - this.recoilKick * 0.042
+        -0.165 + strideBobX + wt * 0.05,
+        1.335 + strideBobY - this.crouchAmount * 0.055 + wt * 0.06,
+        0.265 - this.recoilKick * 0.042 - wt * 0.24
       );
       this.rig.weaponPivot.rotation.set(
-        runCant - this.recoilKick * 0.1,
-        0,
+        runCant - this.recoilKick * 0.1 - wt * 0.96,
+        wt * 0.22,
         0
       );
 
@@ -932,9 +1001,9 @@ export class TacticalAgent {
       );
 
       this.rig.headGroup.rotation.x = -leanFwd * 0.65;
-      this.rig.weaponPivot.rotation.x = -leanFwd * 0.85 - this.recoilKick * 0.12;
-      this.rig.weaponPivot.position.z = 0.08 - this.recoilKick * 0.045;
-      this.rig.weaponPivot.position.y = 0.35 + Math.cos(this.walkPhase * 2) * 0.01 * speedNorm;
+      this.rig.weaponPivot.rotation.x = -leanFwd * 0.85 - this.recoilKick * 0.12 - this.wallTuck * 0.85;
+      this.rig.weaponPivot.position.z = 0.08 - this.recoilKick * 0.045 - this.wallTuck * 0.18;
+      this.rig.weaponPivot.position.y = 0.35 + Math.cos(this.walkPhase * 2) * 0.01 * speedNorm + this.wallTuck * 0.05;
     } else if (this.crouchAmount > 0.25) {
       // Grounded right-handed tactical kneeling stance (left knee forward +X, right knee tucked low -X)
       const c = this.crouchAmount;
@@ -955,9 +1024,9 @@ export class TacticalAgent {
       this.rig.torso.rotation.z = THREE.MathUtils.lerp(this.rig.torso.rotation.z, 0, smooth);
 
       this.rig.headGroup.rotation.x = -0.18 * c;
-      this.rig.weaponPivot.rotation.x = -0.22 * c - this.recoilKick * 0.11;
-      this.rig.weaponPivot.position.z = 0.08 - this.recoilKick * 0.045;
-      this.rig.weaponPivot.position.y = 0.35 + breath;
+      this.rig.weaponPivot.rotation.x = -0.22 * c - this.recoilKick * 0.11 - this.wallTuck * 0.85;
+      this.rig.weaponPivot.position.z = 0.08 - this.recoilKick * 0.045 - this.wallTuck * 0.18;
+      this.rig.weaponPivot.position.y = 0.35 + breath + this.wallTuck * 0.05;
     } else {
       // Natural right-handed combat-ready standing stance (left foot slightly forward, unlocked knees, breathing sway!)
       this.rig.hips.position.y = THREE.MathUtils.lerp(this.rig.hips.position.y, 0.93 + breath, smooth);
@@ -976,10 +1045,10 @@ export class TacticalAgent {
       this.rig.torso.rotation.y = THREE.MathUtils.lerp(this.rig.torso.rotation.y, 0.14, smooth);
       this.rig.torso.rotation.z = THREE.MathUtils.lerp(this.rig.torso.rotation.z, 0, smooth);
 
-    this.rig.headGroup.rotation.x = -0.05;
-      this.rig.weaponPivot.rotation.x = -0.05 - this.recoilKick * 0.12;
-      this.rig.weaponPivot.position.z = 0.08 - this.recoilKick * 0.045;
-      this.rig.weaponPivot.position.y = 0.35 + breath * 1.1;
+      this.rig.headGroup.rotation.x = -0.05;
+      this.rig.weaponPivot.rotation.x = -0.05 - this.recoilKick * 0.12 - this.wallTuck * 0.85;
+      this.rig.weaponPivot.position.z = 0.08 - this.recoilKick * 0.045 - this.wallTuck * 0.18;
+      this.rig.weaponPivot.position.y = 0.35 + breath * 1.1 + this.wallTuck * 0.05;
     }
   }
 
@@ -1102,7 +1171,8 @@ export function hasClearSight(
   from: THREE.Vector3,
   to: THREE.Vector3,
   levelMeshes: THREE.Object3D[],
-  smokes: SmokeCloud[]
+  smokes: SmokeCloud[],
+  colliders?: AABB[]
 ): boolean {
   const dir = new THREE.Vector3().subVectors(to, from);
   const dist = dir.length();
@@ -1112,6 +1182,14 @@ export function hasClearSight(
   // Check if a tactical smoke sphere intersects the line of sight!
   for (const s of smokes) {
     if (segmentIntersectsSphere(from, to, s.pos, s.radius * 0.88)) {
+      return false;
+    }
+  }
+
+  // Analytical AABB solid collider check (guarantees zero vision/fire through any collider-only wall or stair!)
+  if (colliders && colliders.length > 0) {
+    const colDist = raycastCollidersDist(from.x, from.y, from.z, dir.x, dir.y, dir.z, dist - 0.15, colliders);
+    if (colDist < dist - 0.16) {
       return false;
     }
   }

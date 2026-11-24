@@ -25,7 +25,7 @@ export interface BuiltLevel {
   enemySpawns: Array<{ pos: THREE.Vector3; yaw: number; role: 'duelist' | 'striker' | 'sentinel'; name: string }>;
   dustParticles: THREE.Points;
   mapBounds: { minX: number; maxX: number; minZ: number; maxZ: number };
-  updateAtmosphere: (dt: number, elapsed: number) => void;
+  updateAtmosphere: (dt: number, elapsed: number, playerPos?: THREE.Vector3) => void;
 }
 
 export class LevelBuilder {

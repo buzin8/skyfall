@@ -170,6 +170,7 @@ export class WeaponSystem {
   private swayX = 0;
   private swayY = 0;
   private adsProgress = 0;
+  private wallPullback = 0;
   private smoothSpeed = 0;
   private bobPhase = 0;
   private breathPhase = 0;
@@ -1231,13 +1232,20 @@ export class WeaponSystem {
     playerSpeed: number,
     crouching: boolean,
     grounded: boolean,
-    adsHeld: boolean
+    adsHeld: boolean,
+    wallClearance = 1.35
   ): void {
     const w = this.currentWeapon;
     if (this.fireCooldown > 0) this.fireCooldown = Math.max(0, this.fireCooldown - dt);
     if (this.equipTimer > 0) this.equipTimer = Math.max(0, this.equipTimer - dt);
 
-    this.isAds = adsHeld && !this.isReloading && this.equipTimer <= 0;
+    // Real-time CQB Wall-Proximity Barrel Pullback:
+    // Both AKM & SCAR-L extend ~1.04m in front of camera; smoothly pull back & angle muzzle up when approaching ANY wall/cover!
+    const targetWallPull = THREE.MathUtils.clamp((1.12 - wallClearance) / 0.54, 0, 1.15);
+    const pullRate = targetWallPull > this.wallPullback ? 24 : 13;
+    this.wallPullback = THREE.MathUtils.lerp(this.wallPullback, targetWallPull, 1 - Math.exp(-pullRate * dt));
+
+    this.isAds = adsHeld && !this.isReloading && this.equipTimer <= 0 && this.wallPullback < 0.72;
 
     const targetFov = this.isAds ? w.adsFov : 74;
     if (Math.abs(this.camera.fov - targetFov) > 0.05) {
@@ -1365,15 +1373,24 @@ export class WeaponSystem {
     const reloadDip = this.isReloading ? Math.sin(this.reloadProgress * Math.PI) * -0.022 : 0;
     const equipDip = this.equipTimer > 0 ? -(this.equipTimer / Math.max(0.1, w.equipTime)) * 0.24 : 0;
 
+    // CQB Wall-Proximity Pullback & Upward High-Ready Tuck (keeps AKM/SCAR-L barrel 100% outside all walls/cover!)
+    const wallPull = this.wallPullback;
+    const pullZ = wallPull * 0.30;
+    const pullY = -wallPull * 0.095;
+    const pullX = -wallPull * 0.045;
+    const pullPitch = wallPull * 0.90;
+    const pullYaw = wallPull * 0.28;
+    const pullRoll = -wallPull * 0.14;
+
     this.viewmodelRoot.position.set(
-      this.swayX * adsDamp + walkBobX,
-      this.swayY * adsDamp + walkBobY + breathY + reloadDip + equipDip,
-      this.kickZ * (1 - adsEase * 0.35)
+      this.swayX * adsDamp + walkBobX + pullX,
+      this.swayY * adsDamp + walkBobY + breathY + reloadDip + equipDip + pullY,
+      this.kickZ * (1 - adsEase * 0.35) + pullZ
     );
     this.viewmodelRoot.rotation.set(
-      this.kickRotX * (1 - adsEase * 0.45),
-      this.swayX * 1.15 * adsDamp,
-      -this.swayX * 0.9 * adsDamp + walkBobX * 1.8
+      this.kickRotX * (1 - adsEase * 0.45) + pullPitch,
+      this.swayX * 1.15 * adsDamp + pullYaw,
+      -this.swayX * 0.9 * adsDamp + walkBobX * 1.8 + pullRoll
     );
 
     // Update tracers

@@ -4,18 +4,20 @@ export type GameMode = 'tactical' | 'clutch' | 'skirmish';
 export type Difficulty = 'casual' | 'tactical' | 'radiant';
 export type Team = 'ally' | 'enemy';
 export type LobbyTeam = 'blue' | 'red';
-export type MapId = 'factory' | 'foundry';
+export type MapId = 'factory' | 'foundry' | 'downtown';
 export type WeaponId = 'vandal' | 'scarl';
 
 export const MAX_PLAYERS_PER_TEAM = 5;
 export const MIN_PLAYERS_PER_TEAM = 1;
+export const BOT_EMBER_ID = 'bot_ember_red';
 
 export interface LobbyPlayer {
   id: string;
   name: string;
   team: LobbyTeam;
   isHost: boolean;
-  slotIndex: number; // 0..2 within team
+  isBot?: boolean;
+  slotIndex: number; // 0..4 within team
   kills: number;
   deaths: number;
 }

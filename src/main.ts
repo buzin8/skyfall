@@ -5,6 +5,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import {
+  BOT_EMBER_ID,
   Difficulty,
   GameMode,
   GameSettings,
@@ -16,6 +17,8 @@ import {
 import { SoundEngine } from './audio/SoundEngine';
 import { createTextureLibrary, TextureLibrary } from './textures/ProceduralTextures';
 import { BuiltLevel, LevelBuilder } from './world/LevelBuilder';
+import { depenetrateFromColliders } from './world/CollisionUtils';
+import { preloadDowntownGlbs } from './world/DowntownGlbAssets';
 import { PlayerController } from './player/PlayerController';
 import { WeaponSystem } from './weapons/WeaponSystem';
 import { preloadSoldierTemplate } from './entities/AgentModel';
@@ -193,6 +196,10 @@ class SkyfallGame {
   private tdmLocalTeam: LobbyTeam = 'blue';
   private hostLivePlayers = new Map<string, SnapshotPlayerState>();
   private hostPlayerUtils = new Map<string, UtilityBundle>();
+  private botEmberFireCd = 0.8;
+  private botEmberStrafeDir = 1;
+  private botEmberStrafeTimer = 1.6;
+  private botEmberWaypoint = new THREE.Vector3(0, 0, -10);
   private hostLootDrops = new Map<string, NetLootSpawnPayload>();
   private lootDrops = new Map<string, LootDrop>();
   private lootDropSeq = 0;
@@ -212,6 +219,8 @@ class SkyfallGame {
   private tmpHeadPos = new THREE.Vector3();
   private tmpCamFwd = new THREE.Vector3();
   private tmpEyePos = new THREE.Vector3();
+  private tmpWallRayDir = new THREE.Vector3();
+  private tmpOtherBodies: Array<{ x: number; y: number; z: number }> = [];
 
   private settings: GameSettings = {
     map: 'factory',
@@ -278,7 +287,7 @@ class SkyfallGame {
     this.scene = new THREE.Scene();
     this.envFactory = buildDaylightEnvironment(this.renderer);
     this.envFoundry = buildIndustrialEnvironment(this.renderer);
-    this.camera = new THREE.PerspectiveCamera(74, window.innerWidth / window.innerHeight, 0.08, 450);
+    this.camera = new THREE.PerspectiveCamera(74, window.innerWidth / window.innerHeight, 0.08, 750);
     this.scene.add(this.camera);
 
     // 3. Half-res Selective HDR Bloom Post-Processing
@@ -373,15 +382,20 @@ class SkyfallGame {
   private applyPresetToActiveScene(): void {
     const isLowEnd = this.graphicsPreset === 'laptop';
     const isFactory = this.settings.map === 'factory';
+    const isDowntown = this.settings.map === 'downtown';
 
     // Disable heavy PMREM cube-map reflections on LOW END DEVICE; compensate brightness cleanly
     this.scene.environment = isLowEnd ? null : isFactory ? this.envFactory : this.envFoundry;
     this.renderer.toneMappingExposure = isLowEnd
       ? isFactory
         ? 1.24
+        : isDowntown
+        ? 1.28
         : 1.38
       : isFactory
       ? 1.15
+      : isDowntown
+      ? 1.18
       : 1.24;
 
     if (!this.level?.group) return;
@@ -391,7 +405,7 @@ class SkyfallGame {
           obj.userData.baseIntensity = obj.intensity;
         }
         obj.intensity = isLowEnd
-          ? obj.userData.baseIntensity * (isFactory ? 1.32 : 1.48)
+          ? obj.userData.baseIntensity * (isFactory ? 1.32 : isDowntown ? 1.38 : 1.48)
           : obj.userData.baseIntensity;
       } else if (obj.userData?.lowEndOptional || obj instanceof THREE.PointLight) {
         obj.visible = !isLowEnd;
@@ -440,18 +454,21 @@ class SkyfallGame {
 
   private applyMapAtmosphereConfig(mapId: MapId): void {
     const isFactory = mapId === 'factory';
+    const isDowntown = mapId === 'downtown';
     this.scene.environment = isFactory ? this.envFactory : this.envFoundry;
-    this.renderer.toneMappingExposure = isFactory ? 1.15 : 1.24;
+    this.renderer.toneMappingExposure = isFactory ? 1.15 : isDowntown ? 1.2 : 1.24;
     if (this.bloomPass) {
-      // Selective HDR Bloom on BOTH maps: higher threshold on Vikendi keeps crisp sunlit snow sharp while beacons, windows & fire glow!
-      this.bloomPass.threshold = isFactory ? 1.18 : 0.8;
-      this.bloomPass.strength = isFactory ? 0.35 : 0.42;
-      this.bloomPass.radius = isFactory ? 0.44 : 0.48;
+      // Selective HDR Bloom tuned per map: crisp sunlit Vikendi, neon-cyberpunk Midtown Manhattan, glowing Warehouse!
+      this.bloomPass.threshold = isFactory ? 1.18 : isDowntown ? 0.86 : 0.8;
+      this.bloomPass.strength = isFactory ? 0.35 : isDowntown ? 0.44 : 0.42;
+      this.bloomPass.radius = isFactory ? 0.44 : isDowntown ? 0.56 : 0.48;
     }
     const brandTag = document.getElementById('brand-tag');
     if (brandTag) {
       brandTag.textContent = isFactory
         ? 'VIKENDI // SNOW COMPOUND'
+        : isDowntown
+        ? 'DOWNTOWN // MIDTOWN MANHATTAN'
         : 'WAREHOUSE // NIGHT SHIFT';
     }
     if (!this.matchStarted) {
@@ -823,7 +840,12 @@ class SkyfallGame {
     this.abilities.resetCharges();
     this.spawnAgentsForRound(false);
 
-    const mapTitle = this.settings.map === 'factory' ? 'VIKENDI' : 'WAREHOUSE';
+    const mapTitle =
+      this.settings.map === 'factory'
+        ? 'VIKENDI'
+        : this.settings.map === 'downtown'
+        ? 'DOWNTOWN MANHATTAN'
+        : 'WAREHOUSE';
     if (this.settings.mode === 'skirmish') {
       this.hud.showBanner('ENDLESS SKIRMISH', `HOLD ${mapTitle}`, 2.2);
     } else {
@@ -1160,7 +1182,8 @@ class SkyfallGame {
       this.menuOverlay.classList.remove('hidden');
       this.hideTdmError();
       if (this.levelIsTdmExpanded) {
-        this.switchMap(this.settings.map, true);
+        const soloMap: MapId = this.settings.map === 'downtown' ? 'factory' : this.settings.map;
+        this.switchMap(soloMap, true);
       } else {
         this.setupShowcaseFrame();
       }
@@ -1171,6 +1194,7 @@ class SkyfallGame {
   }
 
   private openTdmLobbyOverlay(): void {
+    preloadDowntownGlbs();
     this.setTdmJoinButtonBusy(false);
     this.hideTdmError();
     this.menuOverlay.classList.add('hidden');
@@ -1260,10 +1284,12 @@ class SkyfallGame {
     if (blueCountEl) blueCountEl.textContent = `${bluePlayers.length} / ${MAX_PLAYERS_PER_TEAM}`;
     if (redCountEl) redCountEl.textContent = `${redPlayers.length} / ${MAX_PLAYERS_PER_TEAM}`;
 
-    const renderTeamList = (containerId: string, list: LobbyState['players']) => {
+    const hasBotEmber = state.players.some((pl) => pl.id === BOT_EMBER_ID);
+    const renderTeamList = (containerId: string, list: LobbyState['players'], isRedTeam: boolean) => {
       const wrap = document.getElementById(containerId);
       if (!wrap) return;
       wrap.innerHTML = '';
+      let addEmberShown = false;
       for (let i = 0; i < MAX_PLAYERS_PER_TEAM; i++) {
         const p = list[i];
         const row = document.createElement('div');
@@ -1287,18 +1313,44 @@ class SkyfallGame {
             m.textContent = 'YOU';
             badgeWrap.appendChild(m);
           }
+          if (p.isBot) {
+            const b = document.createElement('span');
+            b.className = 'tdm-badge bot';
+            b.textContent = 'BOT';
+            badgeWrap.appendChild(b);
+            if (this.mp.isHost) {
+              const rm = document.createElement('button');
+              rm.type = 'button';
+              rm.className = 'tdm-remove-bot-btn';
+              rm.textContent = 'REMOVE';
+              rm.title = 'Remove EMBER from Red Team';
+              rm.addEventListener('click', () => this.mp.removeBotEmber());
+              badgeWrap.appendChild(rm);
+            }
+          }
           row.appendChild(nameSpan);
           row.appendChild(badgeWrap);
         } else {
           row.className = 'tdm-slot empty';
-          row.textContent = `OPEN SLOT ${i + 1}`;
+          const lbl = document.createElement('span');
+          lbl.textContent = `OPEN SLOT ${i + 1}`;
+          row.appendChild(lbl);
+          if (isRedTeam && this.mp.isHost && !hasBotEmber && !addEmberShown) {
+            addEmberShown = true;
+            const addBtn = document.createElement('button');
+            addBtn.type = 'button';
+            addBtn.className = 'tdm-add-bot-btn';
+            addBtn.textContent = '+ ADD EMBER';
+            addBtn.addEventListener('click', () => this.mp.addBotEmber());
+            row.appendChild(addBtn);
+          }
         }
         wrap.appendChild(row);
       }
     };
 
-    renderTeamList('tdm-blue-slots', bluePlayers);
-    renderTeamList('tdm-red-slots', redPlayers);
+    renderTeamList('tdm-blue-slots', bluePlayers, false);
+    renderTeamList('tdm-red-slots', redPlayers, true);
 
     const localP = this.mp.getLocalPlayer();
     const joinBlueBtn = document.getElementById('btn-tdm-join-blue') as HTMLButtonElement | null;
@@ -1515,7 +1567,12 @@ class SkyfallGame {
       }
     }
 
-    const mapTitle = this.settings.map === 'factory' ? 'VIKENDI' : 'WAREHOUSE';
+    const mapTitle =
+      this.settings.map === 'factory'
+        ? 'VIKENDI'
+        : this.settings.map === 'downtown'
+        ? 'DOWNTOWN MANHATTAN'
+        : 'WAREHOUSE';
     const teamTag = this.tdmLocalTeam === 'blue' ? 'BLUE TEAM' : 'RED TEAM';
     this.hud.showBanner(`${mapTitle} // ${teamTag}`, `ROUND ${this.roundNumber}`, 2.2);
   }
@@ -1548,6 +1605,266 @@ class SkyfallGame {
         st.spawnShield
       );
     }
+  }
+
+  /**
+   * Lightweight, smooth Host-authoritative TDM AI for default Red Team bot EMBER:
+   * patrols cleanly across Vikendi / Warehouse / Downtown, avoids obstacles, strafes & fires fair tactical bursts!
+   */
+  private updateHostBotEmber(dt: number): void {
+    if (!this.mp.isHost || !this.isTdmMatch || !this.roundActive || !this.mp.lobbyState) return;
+    const bot = this.hostLivePlayers.get(BOT_EMBER_ID);
+    if (!bot || !bot.alive) return;
+
+    const bounds = this.level.mapBounds;
+    const botPos = new THREE.Vector3(bot.x, bot.y, bot.z);
+    const botEye = new THREE.Vector3(bot.x, bot.y + 1.56, bot.z);
+
+    // Find nearest alive Blue Team enemy (including local Host if on Blue Team!)
+    let targetState: SnapshotPlayerState | null = null;
+    let targetDist = Infinity;
+    for (const lp of this.mp.lobbyState.players) {
+      if (lp.team !== 'blue') continue;
+      const st = this.hostLivePlayers.get(lp.id);
+      if (!st || !st.alive) continue;
+      const sx = lp.id === this.mp.localPlayerId ? this.player.pos.x : st.x;
+      const sy = lp.id === this.mp.localPlayerId ? this.player.pos.y : st.y;
+      const sz = lp.id === this.mp.localPlayerId ? this.player.pos.z : st.z;
+      const d = Math.hypot(sx - bot.x, sz - bot.z);
+      if (d < targetDist) {
+        targetDist = d;
+        targetState = { ...st, x: sx, y: sy, z: sz };
+      }
+    }
+
+    let hasLos = false;
+    const toEnemy = new THREE.Vector3();
+    if (targetState) {
+      const targetEye = new THREE.Vector3(targetState.x, targetState.y + (targetState.crouching ? 1.05 : 1.52), targetState.z);
+      toEnemy.subVectors(targetEye, botEye);
+      const dist3d = toEnemy.length();
+      if (dist3d > 0.2 && dist3d < 92) {
+        const dir = toEnemy.clone().divideScalar(dist3d);
+        const colliderBlocked = this.raycastSolidColliders(botEye, dir, Math.max(0.1, dist3d - 0.25));
+        // Check BOTH analytical colliders AND actual level meshes (staircases, railings, cars, buildings) + smokes!
+        hasLos = !colliderBlocked && hasClearSight(botEye, targetEye, this.level.raycastMeshes, this.abilities.smokes);
+      }
+    }
+
+    // Choose smooth movement direction: strafe in combat or patrol cleanly across map lanes
+    this.botEmberStrafeTimer -= dt;
+    if (this.botEmberStrafeTimer <= 0) {
+      this.botEmberStrafeTimer = 1.4 + Math.random() * 1.8;
+      this.botEmberStrafeDir = Math.random() < 0.5 ? -1 : 1;
+      const wx = THREE.MathUtils.lerp(bounds.minX + 8, bounds.maxX - 8, Math.random());
+      const wz = THREE.MathUtils.lerp(bounds.minZ + 8, bounds.maxZ - 8, Math.random());
+      this.botEmberWaypoint.set(wx, 0, wz);
+    }
+
+    let moveX = 0;
+    let moveZ = 0;
+    let moveSpeed = 3.8;
+    let desiredYaw = bot.yaw;
+
+    if (targetState && hasLos) {
+      const dx = targetState.x - bot.x;
+      const dz = targetState.z - bot.z;
+      desiredYaw = Math.atan2(-dx, -dz);
+      const len = Math.hypot(dx, dz) || 1;
+      const nx = dx / len;
+      const nz = dz / len;
+      const strafeX = -nz * this.botEmberStrafeDir;
+      const strafeZ = nx * this.botEmberStrafeDir;
+      const radial = targetDist > 26 ? 0.45 : targetDist < 10 ? -0.4 : 0;
+      moveX = strafeX * 0.72 + nx * radial;
+      moveZ = strafeZ * 0.72 + nz * radial;
+      moveSpeed = 3.1;
+    } else {
+      const gx = targetState && targetDist < 42 ? targetState.x : this.botEmberWaypoint.x;
+      const gz = targetState && targetDist < 42 ? targetState.z : this.botEmberWaypoint.z;
+      const dx = gx - bot.x;
+      const dz = gz - bot.z;
+      const len = Math.hypot(dx, dz);
+      if (len > 1.2) {
+        moveX = dx / len;
+        moveZ = dz / len;
+        desiredYaw = Math.atan2(-moveX, -moveZ);
+      }
+    }
+
+    const evalRampY = (px: number, pz: number): number | null => {
+      const ramps = this.level.ramps;
+      if (!ramps) return null;
+      for (const rp of ramps) {
+        if (px >= rp.minX && px <= rp.maxX && pz >= rp.minZ && pz <= rp.maxZ) {
+          const span = Math.max(0.001, rp.maxZ - rp.minZ);
+          const t = THREE.MathUtils.clamp((pz - rp.minZ) / span, 0, 1);
+          return THREE.MathUtils.lerp(rp.yAtMinZ, rp.yAtMaxZ, t);
+        }
+      }
+      return null;
+    };
+
+    const mLen = Math.hypot(moveX, moveZ);
+    if (mLen > 0.01) {
+      moveX /= mLen;
+      moveZ /= mLen;
+      const nextX = THREE.MathUtils.clamp(bot.x + moveX * moveSpeed * dt, bounds.minX + 1.4, bounds.maxX - 1.4);
+      const nextZ = THREE.MathUtils.clamp(bot.z + moveZ * moveSpeed * dt, bounds.minZ + 1.4, bounds.maxZ - 1.4);
+      const r = 0.6;
+      let blockedX = false;
+      let blockedZ = false;
+      for (const c of this.level.colliders) {
+        if (c.maxY < bot.y + 0.35 || c.minY > bot.y + 1.75) continue;
+        if (nextX + r > c.minX && nextX - r < c.maxX && bot.z + r > c.minZ && bot.z - r < c.maxZ) {
+          blockedX = true;
+        }
+        if (bot.x + r > c.minX && bot.x - r < c.maxX && nextZ + r > c.minZ && nextZ - r < c.maxZ) {
+          blockedZ = true;
+        }
+      }
+      // Prevent EMBER from walking sideways underneath elevated staircases/ramps!
+      const rampX = evalRampY(nextX, bot.z);
+      if (rampX !== null && rampX > bot.y + 0.85) blockedX = true;
+      const rampZ = evalRampY(bot.x, nextZ);
+      if (rampZ !== null && rampZ > bot.y + 0.85) blockedZ = true;
+
+      if (!blockedX) bot.x = nextX;
+      if (!blockedZ) bot.z = nextZ;
+      if (blockedX && blockedZ) {
+        this.botEmberStrafeTimer = 0;
+      }
+
+      // Smoothly follow staircase / floor elevation so EMBER never clips inside stairs!
+      const curRampY = evalRampY(bot.x, bot.z);
+      if (curRampY !== null && Math.abs(curRampY - bot.y) <= 1.2) {
+        bot.y = curRampY;
+      } else {
+        // Settle onto highest supporting floor collider below bot's feet (or y = 0)
+        let supportY = 0;
+        for (const c of this.level.colliders) {
+          if (bot.x >= c.minX && bot.x <= c.maxX && bot.z >= c.minZ && bot.z <= c.maxZ) {
+            if (c.maxY <= bot.y + 0.45 && c.maxY > supportY) {
+              supportY = c.maxY;
+            }
+          }
+        }
+        bot.y = THREE.MathUtils.lerp(bot.y, supportY, Math.min(1, dt * 12));
+      }
+    }
+
+    // Separate EMBER cleanly from every alive human player so characters NEVER overlap!
+    const emberMinDist = 1.06;
+    const emberMinDistSq = emberMinDist * emberMinDist;
+    for (const lp of this.mp.lobbyState.players) {
+      if (lp.id === BOT_EMBER_ID) continue;
+      const st = this.hostLivePlayers.get(lp.id);
+      if (!st || !st.alive) continue;
+      const px = lp.id === this.mp.localPlayerId ? this.player.pos.x : st.x;
+      const py = lp.id === this.mp.localPlayerId ? this.player.pos.y : st.y;
+      const pz = lp.id === this.mp.localPlayerId ? this.player.pos.z : st.z;
+      if (Math.abs(py - bot.y) > 1.55) continue;
+      let ox = bot.x - px;
+      let oz = bot.z - pz;
+      const dSq = ox * ox + oz * oz;
+      if (dSq < emberMinDistSq) {
+        let d = Math.sqrt(dSq);
+        if (d < 1e-4) {
+          ox = 1;
+          oz = 0;
+          d = 1;
+        }
+        const push = (emberMinDist - d) * 0.65;
+        bot.x += (ox / d) * push;
+        bot.z += (oz / d) * push;
+      }
+    }
+
+    // Hard 3-pass solid wall & perimeter depenetration so EMBER NEVER enters walls/cars/crates/bounds!
+    depenetrateFromColliders(bot, 0.6, 1.78, this.level.colliders, bounds, 3, 0.08);
+
+    // Smooth yaw turn
+    let yawDiff = desiredYaw - bot.yaw;
+    while (yawDiff > Math.PI) yawDiff -= Math.PI * 2;
+    while (yawDiff < -Math.PI) yawDiff += Math.PI * 2;
+    bot.yaw += yawDiff * Math.min(1, dt * 7.5);
+    bot.pitch = 0;
+
+    // Controlled fair burst fire with STRICT wall-first raycast from muzzle (ZERO wall or staircase penetration!)
+    this.botEmberFireCd = Math.max(0, this.botEmberFireCd - dt);
+    if (targetState && hasLos && bot.spawnShield <= 0 && this.botEmberFireCd <= 0) {
+      this.botEmberFireCd = 0.42 + Math.random() * 0.32;
+      const muzzle = new THREE.Vector3(bot.x, bot.y + 1.46, bot.z);
+      const targetCenter = new THREE.Vector3(
+        targetState.x + (Math.random() - 0.5) * 0.65,
+        targetState.y + 1.12 + (Math.random() - 0.5) * 0.45,
+        targetState.z + (Math.random() - 0.5) * 0.65
+      );
+      const shotVec = new THREE.Vector3().subVectors(targetCenter, muzzle);
+      const dist = shotVec.length();
+      const shotDir = shotVec.clone().divideScalar(Math.max(0.001, dist));
+
+      // Strict dual wall/staircase raycast (level.raycastMeshes + level.colliders) before ANY hit can register!
+      this.raycaster.set(muzzle, shotDir);
+      this.raycaster.near = 0.05;
+      this.raycaster.far = dist + 0.25;
+      const meshHits = this.raycaster.intersectObjects(this.level.raycastMeshes, false);
+      const colHit = this.raycastSolidColliders(muzzle, shotDir, dist + 0.25);
+
+      let wallDist = Infinity;
+      let wallPoint: THREE.Vector3 | null = null;
+      let wallNormal: THREE.Vector3 | null = null;
+      if (meshHits.length > 0) {
+        wallDist = meshHits[0].distance;
+        wallPoint = meshHits[0].point.clone();
+        wallNormal = meshHits[0].face
+          ? meshHits[0].face.normal.clone().transformDirection(meshHits[0].object.matrixWorld).normalize()
+          : shotDir.clone().negate();
+      }
+      if (colHit && colHit.dist < wallDist) {
+        wallDist = colHit.dist;
+        wallPoint = colHit.point;
+        wallNormal = colHit.normal;
+      }
+
+      const blockedByWall = wallDist < dist - 0.12;
+      const hitRoll = !blockedByWall && Math.random() < Math.max(0.16, 0.46 - dist * 0.005);
+      const isHead = hitRoll && Math.random() < 0.14;
+      const finalEnd = blockedByWall && wallPoint ? wallPoint : targetCenter;
+
+      this.handleHostShotReceived({
+        shooterId: BOT_EMBER_ID,
+        weaponId: 'scarl',
+        weaponName: 'SCAR-L',
+        muzzle: { x: muzzle.x, y: muzzle.y, z: muzzle.z },
+        endPoint: { x: finalEnd.x, y: finalEnd.y, z: finalEnd.z },
+        hitWall: blockedByWall || !hitRoll,
+        wallNormal: wallNormal ? { x: wallNormal.x, y: wallNormal.y, z: wallNormal.z } : undefined,
+        hitTargetId: hitRoll ? targetState.id : undefined,
+        hitZone: hitRoll ? (isHead ? 'head' : 'body') : undefined,
+        hitPoint: hitRoll ? { x: targetCenter.x, y: targetCenter.y, z: targetCenter.z } : undefined,
+        shotDir: { x: shotDir.x, y: shotDir.y, z: shotDir.z },
+        damage: hitRoll ? (isHead ? 48 : 22) : 0,
+      });
+    }
+
+    const rp = this.remotePlayers.get(BOT_EMBER_ID);
+    if (rp) {
+      rp.applyNetworkState(
+        bot.x,
+        bot.y,
+        bot.z,
+        bot.yaw,
+        bot.pitch,
+        bot.crouching,
+        bot.weaponSlot,
+        bot.hp,
+        bot.shield,
+        bot.alive,
+        bot.spawnShield
+      );
+    }
+    void botPos;
   }
 
   private applyTdmWorldSnapshot(snapshot: WorldSnapshot): void {
@@ -2210,15 +2527,16 @@ class SkyfallGame {
     this.tdmOverlay.classList.add('hidden');
     this.matchEndOverlay.classList.add('hidden');
     this.menuOverlay.classList.remove('hidden');
+    const soloMap: MapId = this.settings.map === 'downtown' ? 'factory' : this.settings.map;
     this.btnDeployLabel.textContent =
-      this.settings.map === 'factory' ? 'DEPLOY TO VIKENDI' : 'DEPLOY TO WAREHOUSE';
+      soloMap === 'factory' ? 'DEPLOY TO VIKENDI' : 'DEPLOY TO WAREHOUSE';
     this.btnRestart.textContent = 'RESTART MATCH';
     this.btnRestart.classList.add('hidden');
     if (document.pointerLockElement === this.renderer.domElement) {
       document.exitPointerLock?.();
     }
     if (this.levelIsTdmExpanded) {
-      this.switchMap(this.settings.map, true);
+      this.switchMap(soloMap, true);
     } else {
       this.setupShowcaseFrame();
     }
@@ -2323,6 +2641,47 @@ class SkyfallGame {
       point: origin.clone().addScaledVector(dir, bestT),
       normal: bestNormal,
     };
+  }
+
+  /**
+   * Fast 3-ray camera-to-wall clearance probe (center + +/-22 deg horizontal fan, max 1.18m)
+   * checking BOTH analytical AABB colliders AND level raycastMeshes (staircases, cars, railings, pillars)
+   * so first-person AKM & SCAR-L barrels NEVER poke inside any wall or obstacle on ANY map!
+   */
+  private computeCameraWallClearance(eye: THREE.Vector3, fwd: THREE.Vector3): number {
+    const maxDist = 1.18;
+    let best = maxDist;
+    const offsets = [0, 0.38, -0.38];
+
+    for (let i = 0; i < offsets.length; i++) {
+      const ang = offsets[i];
+      if (ang === 0) {
+        this.tmpWallRayDir.copy(fwd);
+      } else {
+        const c = Math.cos(ang);
+        const s = Math.sin(ang);
+        this.tmpWallRayDir.set(
+          fwd.x * c - fwd.z * s,
+          fwd.y,
+          fwd.x * s + fwd.z * c
+        ).normalize();
+      }
+
+      const colHit = this.raycastSolidColliders(eye, this.tmpWallRayDir, best);
+      if (colHit && colHit.dist < best) {
+        best = colHit.dist;
+      }
+
+      this.raycaster.set(eye, this.tmpWallRayDir);
+      this.raycaster.near = 0.02;
+      this.raycaster.far = best;
+      const meshHits = this.raycaster.intersectObjects(this.level.raycastMeshes, false);
+      if (meshHits.length > 0 && meshHits[0].distance < best) {
+        best = meshHits[0].distance;
+      }
+    }
+
+    return best;
   }
 
   private projectWallBloodSplatter(hitPoint: THREE.Vector3, shotDir: THREE.Vector3, scale: number): void {
@@ -2756,6 +3115,8 @@ class SkyfallGame {
 
     if (this.isTdmMatch) {
       const dir = new THREE.Vector3();
+      const maxLosDist = this.settings.map === 'downtown' ? 118 : 74;
+      const maxSpotDist = this.settings.map === 'downtown' ? 98 : 64;
       for (const rp of this.remotePlayers.values()) {
         if (!rp.alive || rp.team === this.tdmLocalTeam) {
           rp.losVisible = false;
@@ -2766,7 +3127,7 @@ class SkyfallGame {
         const dy = rpEye.y - eye.y;
         const dz = rpEye.z - eye.z;
         const dist = Math.hypot(dx, dy, dz);
-        if (dist > 74) {
+        if (dist > maxLosDist) {
           rp.losVisible = false;
           continue;
         }
@@ -2794,7 +3155,7 @@ class SkyfallGame {
             }
           }
           rp.losVisible = clear || dist < 3.0;
-          if (clear && dot > 0.56 && dist <= 64) {
+          if (clear && dot > 0.56 && dist <= maxSpotDist) {
             rp.spottedTimer = 2.6;
           }
         } else {
@@ -2837,8 +3198,8 @@ class SkyfallGame {
       this.fpsFrames = 0;
     }
 
-    // Animated burning braziers, flickering fluorescent tubes, exhaust fan & rising embers
-    this.level.updateAtmosphere(dt, elapsed);
+    // Animated burning braziers, snowflakes, neon pulse & Downtown GTA-style civilian NPCs!
+    this.level.updateAtmosphere(dt, elapsed, this.player.pos);
 
     // Universal Auto-60-FPS Booster: steps down Bloom -> Direct 1.0 DPR -> Low End Device if FPS drops below ~38!
     if (!this.userPickedGraphics && !this.paused && this.graphicsPreset !== 'laptop') {
@@ -2874,6 +3235,19 @@ class SkyfallGame {
           this.level.ramps
         );
 
+        // Prevent player from overlapping any alive TDM teammate, enemy, or EMBER bot (while strictly preserving wall bounds!)
+        this.tmpOtherBodies.length = 0;
+        for (const rp of this.remotePlayers.values()) {
+          if (rp.alive) this.tmpOtherBodies.push(rp.pos);
+        }
+        this.player.resolveCharacterOverlap(
+          this.tmpOtherBodies,
+          this.level.colliders,
+          this.level.mapBounds,
+          this.level.ramps,
+          this.camera
+        );
+
         if (this.player.alive && this.roundActive) {
           this.handlePlayerShot();
         } else {
@@ -2895,7 +3269,13 @@ class SkyfallGame {
             st.spawnShield = st.alive ? Math.max(0, st.spawnShield - dt) : 0;
           }
         }
+        this.updateHostBotEmber(dt);
       }
+
+      const playerEye = this.player.getEyePosition(this.tmpEyePos);
+      const camFwd = this.tmpCamFwd;
+      this.camera.getWorldDirection(camFwd);
+      const wallClearance = this.player.alive ? this.computeCameraWallClearance(playerEye, camFwd) : 1.35;
 
       this.weapons.setVisible(this.player.alive);
       this.weapons.update(
@@ -2903,12 +3283,9 @@ class SkyfallGame {
         this.paused ? 0 : this.player.horizontalSpeed,
         this.player.crouching,
         this.player.grounded,
-        !this.paused && this.adsHeld && this.player.alive && !this.activeHeal
+        !this.paused && this.adsHeld && this.player.alive && !this.activeHeal,
+        wallClearance
       );
-
-      const playerEye = this.player.getEyePosition(this.tmpEyePos);
-      const camFwd = this.tmpCamFwd;
-      this.camera.getWorldDirection(camFwd);
 
       this.abilities.update(
         dt,
@@ -2933,9 +3310,9 @@ class SkyfallGame {
         }
       );
 
-      // Update all 3rd-person rigged remote human players (teammates + enemies)
+      // Update all 3rd-person rigged remote human players & bots (wall clamping + 3rd-person CQB rifle tuck!)
       for (const rp of this.remotePlayers.values()) {
-        rp.update(dt);
+        rp.update(dt, this.level.colliders, this.level.mapBounds, this.level.ramps);
       }
 
       // Animate dropped utility loot crates & detect nearest crate within pickup range (F) — works mid-round & post-round!
@@ -3097,7 +3474,21 @@ class SkyfallGame {
         this.weapons.currentWeapon.moveSpeedMult,
         this.weapons.recoilPitch,
         this.weapons.recoilYaw,
-        this.level.mapBounds
+        this.level.mapBounds,
+        this.level.ramps
+      );
+
+      // Prevent player from overlapping any alive Solo AI ally or enemy bot (while strictly preserving wall bounds!)
+      this.tmpOtherBodies.length = 0;
+      for (const agent of this.agents) {
+        if (agent.alive) this.tmpOtherBodies.push(agent.pos);
+      }
+      this.player.resolveCharacterOverlap(
+        this.tmpOtherBodies,
+        this.level.colliders,
+        this.level.mapBounds,
+        this.level.ramps,
+        this.camera
       );
 
       if (this.player.alive && this.roundActive) {
@@ -3105,18 +3496,22 @@ class SkyfallGame {
       } else {
         this.fireJustPressed = false;
       }
+
+      const playerEye = this.player.getEyePosition(this.tmpEyePos);
+      const camFwd = this.tmpCamFwd;
+      this.camera.getWorldDirection(camFwd);
+      const wallClearance = this.player.alive ? this.computeCameraWallClearance(playerEye, camFwd) : 1.35;
+
       this.weapons.setVisible(this.player.alive);
       this.weapons.update(
         dt,
         this.player.horizontalSpeed,
         this.player.crouching,
         this.player.grounded,
-        this.adsHeld && this.player.alive
+        this.adsHeld && this.player.alive,
+        wallClearance
       );
 
-      const playerEye = this.player.getEyePosition();
-      const camFwd = new THREE.Vector3();
-      this.camera.getWorldDirection(camFwd);
       this.abilities.update(
         dt,
         this.level.colliders,
@@ -3181,7 +3576,9 @@ class SkyfallGame {
           this.abilities.smokes,
           this.settings.difficulty,
           this.roundActive,
-          (ev) => this.handleAgentFire(ev)
+          (ev) => this.handleAgentFire(ev),
+          this.level.mapBounds,
+          this.level.ramps
         );
       }
 

@@ -3,6 +3,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { AABB, MapId, MinimapRect, RampCollider, ZoneDef } from '../types';
 import { TextureLibrary } from '../textures/ProceduralTextures';
 import { BuiltLevel } from './LevelBuilder';
+import { DowntownLevelBuilder } from './DowntownLevelBuilder';
 
 const FLOOR2_Y = 4.2;
 const SLAB_THICK = 0.34;
@@ -881,6 +882,9 @@ export class TdmLevelBuilder {
     if (mapId === 'factory') {
       return this.buildVikendiTdm(scene);
     }
+    if (mapId === 'downtown') {
+      return new DowntownLevelBuilder().build(scene);
+    }
     return this.buildWarehouseTdm(scene);
   }
 
@@ -1245,11 +1249,12 @@ export class TdmLevelBuilder {
       yAtMaxZ: startZ < slopeEndZ ? FLOOR2_Y : 0,
     });
 
-    // 2. Render crisp 3D stepped treads (in raycastMeshes for bullet blocking, noCollider so zero step-snag!)
+    // 2. Render crisp 3D stepped treads (overlapping underside thickness prevents diagonal bullet slits, noCollider so zero step-snag!)
     for (let i = 0; i < steps; i++) {
       const topY = (i + 1) * stepRise;
       const cz = startZ + (i + 0.5) * stepRun;
-      this.addSolidBox(centerX, topY - stepRise * 0.5, cz, width, stepRise, absRun + 0.04, matStep, {
+      const stepH = Math.min(topY, stepRise * 1.75);
+      this.addSolidBox(centerX, topY - stepH * 0.5, cz, width, stepH, absRun + 0.06, matStep, {
         castShadow: true,
         receiveShadow: true,
         noCollider: true,

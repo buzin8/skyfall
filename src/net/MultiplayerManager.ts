@@ -1,5 +1,6 @@
 import Peer, { DataConnection } from 'peerjs';
 import {
+  BOT_EMBER_ID,
   LobbyPlayer,
   LobbyState,
   LobbyTeam,
@@ -330,6 +331,16 @@ export class MultiplayerManager {
           kills: 0,
           deaths: 0,
         },
+        {
+          id: BOT_EMBER_ID,
+          name: 'EMBER',
+          team: 'red',
+          isHost: false,
+          isBot: true,
+          slotIndex: 0,
+          kills: 0,
+          deaths: 0,
+        },
       ],
     };
 
@@ -585,6 +596,38 @@ export class MultiplayerManager {
     } else {
       this.sendToHost({ type: 'SWITCH_TEAM', playerId: this.localPlayerId, team });
     }
+  }
+
+  public removeBotEmber(): void {
+    if (!this.isHost || !this.lobbyState || this.lobbyState.inMatch) return;
+    const before = this.lobbyState.players.length;
+    this.lobbyState.players = this.lobbyState.players.filter((p) => p.id !== BOT_EMBER_ID);
+    if (this.lobbyState.players.length === before) return;
+    this.reindexTeamSlots();
+    const state = this.cloneLobbyState();
+    this.broadcastFromHost({ type: 'LOBBY_STATE', state });
+    this.cb.onLobbyState(state);
+  }
+
+  public addBotEmber(): void {
+    if (!this.isHost || !this.lobbyState || this.lobbyState.inMatch) return;
+    if (this.lobbyState.players.some((p) => p.id === BOT_EMBER_ID)) return;
+    const redCount = this.lobbyState.players.filter((p) => p.team === 'red').length;
+    if (redCount >= MAX_PLAYERS_PER_TEAM) return;
+    this.lobbyState.players.push({
+      id: BOT_EMBER_ID,
+      name: 'EMBER',
+      team: 'red',
+      isHost: false,
+      isBot: true,
+      slotIndex: redCount,
+      kills: 0,
+      deaths: 0,
+    });
+    this.reindexTeamSlots();
+    const state = this.cloneLobbyState();
+    this.broadcastFromHost({ type: 'LOBBY_STATE', state });
+    this.cb.onLobbyState(state);
   }
 
   public broadcastMatchStart(round: RoundStartPayload): void {
