@@ -383,6 +383,8 @@ export class DowntownNpcSystem {
     for (let i = 0; i < this.actors.length; i++) {
       const a = this.actors[i];
       if (!a.root.visible) continue;
+      const prevX = a.pos.x;
+      const prevZ = a.pos.z;
 
       if (a.idleTimer > 0) {
         a.idleTimer -= stepDt;
@@ -443,7 +445,6 @@ export class DowntownNpcSystem {
           }
 
           a.currentSpeed = THREE.MathUtils.lerp(a.currentSpeed, desiredSpeed, Math.min(1, stepDt * 5.2));
-          a.blendWalk = THREE.MathUtils.lerp(a.blendWalk, 1, Math.min(1, stepDt * 6.0));
           a.pos.x += dx * a.currentSpeed * stepDt;
           a.pos.z += dz * a.currentSpeed * stepDt;
 
@@ -451,7 +452,7 @@ export class DowntownNpcSystem {
           let diff = targetYaw - a.yaw;
           while (diff > Math.PI) diff -= Math.PI * 2;
           while (diff < -Math.PI) diff += Math.PI * 2;
-          a.yaw += diff * Math.min(1, stepDt * 5.4);
+          a.yaw += diff * Math.min(1, stepDt * 8.5);
         }
       }
 
@@ -506,7 +507,21 @@ export class DowntownNpcSystem {
       const rig = a.rig;
       if (!rig) continue;
 
-      a.walkPhase += stepDt * a.currentSpeed * 3.85;
+      // Measure ACTUAL post-collision forward ground travel along facing direction -> ZERO foot-slip / ZERO moonwalking!
+      const stepDx = a.pos.x - prevX;
+      const stepDz = a.pos.z - prevZ;
+      const fwdStep = stepDx * Math.sin(a.yaw) + stepDz * Math.cos(a.yaw);
+      const actualFwdSpeed = Math.max(0, fwdStep / Math.max(1e-4, stepDt));
+
+      const targetBlend = actualFwdSpeed > 0.12 ? Math.min(1, actualFwdSpeed / Math.max(0.5, a.walkSpeed * 0.72)) : 0;
+      a.blendWalk = THREE.MathUtils.lerp(a.blendWalk, targetBlend, Math.min(1, stepDt * 8.5));
+
+      // Lock stride angular rate exactly to foot-to-ground speed: v_foot = legLen * strideAmp * dPhase/dt = actualFwdSpeed!
+      const legLen = a.heightMeters * 0.49;
+      const strideAmp = 0.45;
+      if (fwdStep > 0.0001) {
+        a.walkPhase += fwdStep / Math.max(0.25, legLen * strideAmp);
+      }
       const p = a.walkPhase;
       const w = a.blendWalk;
       const sL = Math.sin(p);
@@ -514,10 +529,11 @@ export class DowntownNpcSystem {
 
       // Right-hand rule around character +X (Left axis):
       // Negative pitch = swing limb FORWARD (+Z); Positive pitch = swing limb BACKWARD (-Z) / bend knee BACK!
-      const legSwingL = -sL * 0.44 * w;
-      const legSwingR = -sR * 0.44 * w;
-      const kneeBendL = (Math.max(0, Math.sin(p - 1.15)) * 0.68 + 0.05) * w;
-      const kneeBendR = (Math.max(0, Math.sin(p + Math.PI - 1.15)) * 0.68 + 0.05) * w;
+      // Planted STANCE leg (p in [PI/2..3PI/2]) stays STRAIGHT pushing backward; SWING leg (p around 0/2PI) bends knee cleanly!
+      const legSwingL = -sL * strideAmp * w;
+      const legSwingR = -sR * strideAmp * w;
+      const kneeBendL = (Math.max(0, Math.cos(p + 0.32)) * 0.76 + 0.04) * w;
+      const kneeBendR = (Math.max(0, Math.cos(p + Math.PI + 0.32)) * 0.76 + 0.04) * w;
 
       applyBonePitch(rig.upperLegL, legSwingL);
       applyBonePitch(rig.lowerLegL, kneeBendL);
@@ -525,14 +541,14 @@ export class DowntownNpcSystem {
       applyBonePitch(rig.lowerLegR, kneeBendR);
 
       // Natural counter-swinging arms & relaxed human elbow flexion (negative pitch bends forearm forward!)
-      applyBonePitch(rig.upperArmL, -sR * 0.34 * w);
-      applyBonePitch(rig.lowerArmL, -(0.14 + Math.max(0, sR) * 0.24) * w - 0.12 * (1 - w));
-      applyBonePitch(rig.upperArmR, -sL * 0.34 * w);
-      applyBonePitch(rig.lowerArmR, -(0.14 + Math.max(0, sL) * 0.24) * w - 0.12 * (1 - w));
+      applyBonePitch(rig.upperArmL, -sR * 0.32 * w);
+      applyBonePitch(rig.lowerArmL, -(0.12 + Math.max(0, sR) * 0.22) * w - 0.1 * (1 - w));
+      applyBonePitch(rig.upperArmR, -sL * 0.32 * w);
+      applyBonePitch(rig.lowerArmR, -(0.12 + Math.max(0, sL) * 0.22) * w - 0.1 * (1 - w));
 
-      // Subtle hip vertical stride bounce & upper-body counter-twist
-      rig.modelGroup.position.y = Math.abs(Math.cos(p)) * 0.032 * w;
-      applyBoneYawRoll(rig.spine, -sL * 0.08 * w, sL * 0.025 * w);
+      // Subtle hip vertical vaulting bounce (peaks over straight planted mid-stance leg, lowest at wide heel-strike!)
+      rig.modelGroup.position.y = Math.abs(Math.cos(p)) * 0.026 * w;
+      applyBoneYawRoll(rig.spine, -sL * 0.075 * w, sL * 0.022 * w);
 
       // Relaxed ambient gaze when walking; admiring towering Times Square billboards when paused!
       const headPitch = THREE.MathUtils.lerp(-0.22, -0.04, w);

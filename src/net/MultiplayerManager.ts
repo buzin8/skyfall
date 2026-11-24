@@ -206,11 +206,23 @@ const PEER_PREFIX = 'skyfall-tdm-';
 const LEGACY_PEER_PREFIX = 'sunfire-tdm-';
 
 const ICE_CONFIG: RTCConfiguration = {
+  iceCandidatePoolSize: 4,
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun.cloudflare.com:3478' },
     { urls: 'stun:global.stun.twilio.com:3478' },
+    // Public TURN relays so friends on different Wi-Fi / 4G / 5G mobile hotspots & symmetric NATs connect reliably!
+    {
+      urls: [
+        'turn:openrelay.metered.ca:80',
+        'turn:openrelay.metered.ca:80?transport=tcp',
+        'turn:openrelay.metered.ca:443',
+        'turns:openrelay.metered.ca:443?transport=tcp',
+      ],
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
   ],
 };
 
@@ -438,9 +450,10 @@ export class MultiplayerManager {
     this.openBroadcastChannel(code);
     this.postLocal('*', { type: 'JOIN_REQ', playerId: this.localPlayerId, name });
 
-    // 2. Simultaneously connect over PeerJS WebRTC (with automatic legacy sunfire-tdm- fallback + 1s host-warmup retry!)
+    // 2. Simultaneously connect over PeerJS WebRTC (with automatic legacy sunfire-tdm- fallback + 1s host-warmup & ICE retry!)
     let triedLegacyPrefix = false;
     let retriedOnce = false;
+    let retriedIce = false;
     let activePrefix = PEER_PREFIX;
 
     try {
@@ -503,10 +516,20 @@ export class MultiplayerManager {
           if (iceState === 'checking') {
             this.cb.onStatus(`ESTABLISHING P2P LINK...`, false);
           } else if (iceState === 'failed') {
+            if (!retriedIce) {
+              retriedIce = true;
+              this.cb.onStatus(`RETRYING RELAY LINK TO ${code}...`, false);
+              window.setTimeout(() => {
+                if (this.peer === peer && !this.connected && this.activeClientLink !== 'local') {
+                  connectToHost(activePrefix);
+                }
+              }, 800);
+              return;
+            }
             this.clearJoinTimers();
             this.leaveLobby(false);
             this.cb.onError(
-              `Network firewall/NAT blocked direct P2P to "${code}". Try connecting via home Wi-Fi or ask the other player to host.`
+              `Network firewall/NAT blocked P2P to "${code}". Try switching Wi-Fi or ask the other player to host.`
             );
           }
         });

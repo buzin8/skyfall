@@ -4,14 +4,12 @@ import { AABB, MinimapRect, RampCollider, ZoneDef } from '../types';
 import { BuiltLevel } from './LevelBuilder';
 import { DowntownTexturePack, FacadeStyle, getDowntownTextures } from './DowntownTextures';
 import { DowntownNpcSystem, PedestrianNode } from './DowntownNpcs';
+import { buildRealisticDowntownTree, DowntownTreeSpecies } from './DowntownTrees';
+import { buildRealisticDowntownVehicle, DowntownVehicleType } from './DowntownVehicles';
 import {
-  DOWNTOWN_TREE_GLBS,
-  DowntownCarGlbId,
   fitGlbInstance,
   loadDowntownGlb,
   preloadDowntownGlbs,
-  styleGlbCarForMidnightNyc,
-  styleGlbTreeForMidnightNyc,
 } from './DowntownGlbAssets';
 
 const HALF_W = 50; // 100m x 100m = 10,000 m² playable Midtown Manhattan (3.08x Vikendi TDM!)
@@ -59,6 +57,7 @@ export class DowntownLevelBuilder {
   private colorMatCache = new Map<string, THREE.MeshStandardMaterial>();
   private basicMatCache = new Map<number, THREE.MeshBasicMaterial>();
   private pulseLights: Array<{ light: THREE.PointLight; base: number; phase: number }> = [];
+  private emergencyLights: Array<{ mat: THREE.MeshBasicMaterial; phase: number; colorA: number; colorB: number }> = [];
 
   constructor() {
     this.dTex = getDowntownTextures();
@@ -296,15 +295,54 @@ export class DowntownLevelBuilder {
     const fullMaxZ = Math.max(startZ, endZ);
     for (const side of [-1, 1]) {
       const rx = centerX + side * (width * 0.5 + 0.08);
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.11, slopeLen), matRail);
+
+      // Sloped structural side stringer anchored along the step edge
+      const stringer = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.32, slopeLen), matRail);
+      stringer.position.set(rx, topY * 0.5 - 0.1, midZ);
+      stringer.rotation.x = slopeAngle;
+      this.group.add(stringer);
+
+      // Sloped top handrail + intermediate guard rail (zero floating bars!)
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.1, slopeLen), matRail);
       rail.position.set(rx, topY * 0.5 + 0.94, midZ);
       rail.rotation.x = slopeAngle;
       this.group.add(rail);
 
+      const midGuard = new THREE.Mesh(new THREE.BoxGeometry(0.065, 0.065, slopeLen), matRail);
+      midGuard.position.set(rx, topY * 0.5 + 0.48, midZ);
+      midGuard.rotation.x = slopeAngle;
+      this.group.add(midGuard);
+
       const railGlow = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.045, slopeLen), matGlow);
-      railGlow.position.set(rx, topY * 0.5 + 1.01, midZ);
+      railGlow.position.set(rx, topY * 0.5 + 1.0, midZ);
       railGlow.rotation.x = slopeAngle;
       this.group.add(railGlow);
+
+      // Horizontal top-landing handrail + mid-bar connecting seamlessly into the upper deck!
+      const topRail = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.1, landingLen + 0.06), matRail);
+      topRail.position.set(rx, topY + 0.94, landingCenterZ);
+      this.group.add(topRail);
+
+      const topMidGuard = new THREE.Mesh(new THREE.BoxGeometry(0.065, 0.065, landingLen + 0.06), matRail);
+      topMidGuard.position.set(rx, topY + 0.48, landingCenterZ);
+      this.group.add(topMidGuard);
+
+      // 6 Solid vertical baluster posts anchored from step/stringer straight up into the handrail!
+      const postCount = 5;
+      for (let p = 0; p <= postCount; p++) {
+        const f = p / postCount;
+        const pz = startZ + f * slopeRun;
+        const py = f * topY;
+        const postH = 1.08;
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.1, postH, 0.1), matRail);
+        post.position.set(rx, py + postH * 0.5 - 0.12, pz);
+        this.group.add(post);
+      }
+
+      // End post at top landing edge
+      const endPost = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.08, 0.1), matRail);
+      endPost.position.set(rx, topY + 0.42, endZ);
+      this.group.add(endPost);
 
       this.colliders.push({
         minX: rx - 0.09,
@@ -318,17 +356,20 @@ export class DowntownLevelBuilder {
   }
 
   public build(scene: THREE.Scene): BuiltLevel {
-    // 1. Cinematic Midnight Cobalt-Indigo Manhattan Sky Dome
-    const skyGeo = new THREE.SphereGeometry(390, 24, 16);
+    // 1. Vibrant Synthwave Magenta-Crimson-Violet Sunset Sky Dome + Giant Radiant Setting Sun!
+    const skyGeo = new THREE.SphereGeometry(390, 48, 32);
+    const sunDirection = new THREE.Vector3(-0.18, 0.42, -0.89).normalize();
     const skyMat = new THREE.ShaderMaterial({
       side: THREE.BackSide,
       depthWrite: false,
+      toneMapped: false,
       uniforms: {
-        topColor: { value: new THREE.Color('#071532') },
-        midColor: { value: new THREE.Color('#122c5c') },
-        lowColor: { value: new THREE.Color('#1f4582') },
-        horizonColor: { value: new THREE.Color('#2d5da0') },
-        glowDir: { value: new THREE.Vector3(-0.1, 0.12, -0.95).normalize() },
+        topColor: { value: new THREE.Color('#2c0c60') },      // Deep Twilight Ultraviolet Zenith
+        upperColor: { value: new THREE.Color('#961088') },    // Electric Neon Orchid-Violet
+        midColor: { value: new THREE.Color('#e21a7a') },      // Vivid Hot-Magenta Crimson Sky
+        lowColor: { value: new THREE.Color('#ff4a86') },      // Radiant Sunset Coral-Pink
+        horizonColor: { value: new THREE.Color('#9c2898') },  // Misty Neon Violet-Pink Horizon
+        sunDir: { value: sunDirection },
       },
       vertexShader: `
         varying vec3 vWorldPos;
@@ -340,51 +381,126 @@ export class DowntownLevelBuilder {
       `,
       fragmentShader: `
         uniform vec3 topColor;
+        uniform vec3 upperColor;
         uniform vec3 midColor;
         uniform vec3 lowColor;
         uniform vec3 horizonColor;
-        uniform vec3 glowDir;
+        uniform vec3 sunDir;
         varying vec3 vWorldPos;
+
+        float hash21(vec2 p) {
+          p = fract(p * vec2(123.34, 456.21));
+          p += dot(p, p + 45.32);
+          return fract(p.x * p.y);
+        }
+
         void main() {
           vec3 d = normalize(vWorldPos);
-          float h = d.y;
+          float h = clamp(d.y, -0.15, 1.0);
+
+          // Rich multi-stop Synthwave Sunset vertical gradient
           vec3 col = mix(horizonColor, lowColor, smoothstep(-0.02, 0.14, h));
-          col = mix(col, midColor, smoothstep(0.12, 0.36, h));
-          col = mix(col, topColor, smoothstep(0.32, 0.78, h));
-          float tsGlow = max(dot(d, glowDir), 0.0);
-          col += vec3(0.08, 0.24, 0.42) * pow(tsGlow, 3.0) * (1.0 - smoothstep(0.0, 0.42, h));
-          col += vec3(0.22, 0.06, 0.24) * pow(max(dot(d, vec3(0.5, 0.1, 0.8)), 0.0), 4.0) * (1.0 - smoothstep(0.0, 0.35, h));
-          float cloudBand = smoothstep(0.05, 0.2, h) * (1.0 - smoothstep(0.34, 0.62, h));
-          float w = sin(d.x * 7.5 + d.z * 4.2) * cos(d.z * 6.0 - d.x * 3.8);
-          col = mix(col, vec3(0.14, 0.26, 0.46), cloudBand * smoothstep(0.25, 0.78, w * 0.5 + 0.5) * 0.48);
+          col = mix(col, midColor, smoothstep(0.12, 0.34, h));
+          col = mix(col, upperColor, smoothstep(0.30, 0.58, h));
+          col = mix(col, topColor, smoothstep(0.54, 0.90, h));
+
+          // Warm golden-peach atmospheric scatter radiating around the giant setting sun
+          float sunCos = clamp(dot(d, sunDir), -1.0, 1.0);
+          float sunAlign = max(sunCos, 0.0);
+          float sunAng = acos(sunCos);
+
+          // Broad crimson-coral & peach sunset horizon glow toward the sun
+          col += vec3(0.46, 0.14, 0.20) * pow(sunAlign, 2.2) * (1.0 - smoothstep(0.05, 0.65, h));
+          col += vec3(0.58, 0.28, 0.12) * pow(sunAlign, 6.0);
+          col += vec3(0.65, 0.45, 0.24) * pow(sunAlign, 18.0);
+
+          // Dreamy layered magenta, coral & violet painted sunset clouds across the sky
+          float cloudZone = smoothstep(0.04, 0.20, h) * (1.0 - smoothstep(0.52, 0.82, h));
+          float c1 = sin(d.x * 6.5 + d.z * 3.2) * cos(d.z * 5.1 - d.x * 2.9 + h * 7.0);
+          float c2 = sin(d.x * 13.0 - d.z * 8.5 + h * 11.0) * 0.5 + 0.5;
+          float cloudMask = smoothstep(0.18, 0.78, c1 * 0.55 + c2 * 0.45) * cloudZone;
+          vec3 cloudDark = mix(vec3(0.38, 0.07, 0.44), vec3(0.86, 0.16, 0.46), pow(sunAlign, 1.6));
+          vec3 cloudLit = mix(vec3(0.98, 0.26, 0.58), vec3(1.0, 0.62, 0.46), pow(sunAlign, 3.0));
+          col = mix(col, mix(cloudDark, cloudLit, smoothstep(0.25, 0.85, c2)), cloudMask * 0.52);
+
+          // Subtle ethereal vertical cyber-sky shimmer streaks (like the reference sunset sky!)
+          float az = atan(d.x, d.z);
+          float streakCell = floor(az * 46.0);
+          float streakSeed = hash21(vec2(streakCell, 3.7));
+          float streakX = abs(fract(az * 46.0) - 0.5);
+          float streakLine = smoothstep(0.065, 0.0, streakX) * step(0.62, streakSeed);
+          float streakY = smoothstep(0.16, 0.34, h) * (1.0 - smoothstep(0.52, 0.74, h));
+          col += vec3(1.0, 0.55, 0.86) * streakLine * streakY * 0.22;
+
+          // MASSIVE SYNTHWAVE SETTING SUN (razor-sharp luminous cream-white -> gold -> coral-pink disc!)
+          float sunRadius = 0.155;
+          float sunDisc = 1.0 - smoothstep(sunRadius - 0.0045, sunRadius + 0.0045, sunAng);
+          if (sunDisc > 0.001) {
+            // Vertical coordinate across the sun disc (0.0 = bottom rim, 1.0 = top rim)
+            vec3 sunUp = normalize(vec3(0.0, 1.0, 0.0) - sunDir * sunDir.y);
+            vec3 sunRight = normalize(cross(sunUp, sunDir));
+            float localY = dot(d - sunDir, sunUp) / sunRadius; // -1..+1
+            float localX = dot(d - sunDir, sunRight) / sunRadius;
+            float sunT = clamp(localY * 0.5 + 0.5, 0.0, 1.0);
+
+            // Radiant sunset sun palette matching reference: white-cream crown -> lemon gold -> warm orange -> coral-pink base!
+            vec3 sCol = mix(vec3(1.0, 0.36, 0.48), vec3(1.0, 0.66, 0.18), smoothstep(0.0, 0.30, sunT));
+            sCol = mix(sCol, vec3(1.0, 0.94, 0.48), smoothstep(0.28, 0.56, sunT));
+            sCol = mix(sCol, vec3(1.18, 1.15, 1.06), smoothstep(0.52, 0.88, sunT));
+
+            // Soft wispy sunlit coral-lavender cloud bands drifting gently across the lower-mid face of the sun!
+            float bandWave = sin(localY * 22.0 + sin(localX * 4.2) * 1.4) * 0.5 + 0.5;
+            float bandWisp = sin(localX * 3.1 + localY * 11.0) * 0.5 + 0.5;
+            float lowerHalf = 1.0 - smoothstep(0.18, 0.68, sunT);
+            float sunCloud = smoothstep(0.42, 0.88, bandWave * 0.65 + bandWisp * 0.35) * lowerHalf;
+            vec3 sunCloudTint = mix(vec3(0.95, 0.34, 0.62), vec3(1.0, 0.62, 0.56), sunT);
+            sCol = mix(sCol, sunCloudTint, sunCloud * 0.58);
+
+            // Soft bottom atmospheric haze blend so the lower edge of the sun melts dreamingly into the horizon mist
+            float baseHaze = (1.0 - smoothstep(0.0, 0.24, sunT)) * 0.36;
+            sCol = mix(sCol, vec3(1.0, 0.52, 0.68), baseHaze);
+
+            col = mix(col, sCol, sunDisc);
+          }
+
+          // Bright concentric solar halo hugging the rim of the giant sun
+          float rimGlow = exp(-max(0.0, sunAng - sunRadius * 0.82) * 9.5);
+          col += vec3(1.0, 0.48, 0.52) * rimGlow * 0.55;
+
+          // Subtle twilight mist band right at ground level
+          float mistFloor = 1.0 - smoothstep(-0.04, 0.10, h);
+          col = mix(col, vec3(0.46, 0.14, 0.56), mistFloor * 0.42);
+
           gl_FragColor = vec4(col, 1.0);
         }
       `,
     });
     this.group.add(new THREE.Mesh(skyGeo, skyMat));
-    scene.background = new THREE.Color('#091834');
-    scene.fog = new THREE.FogExp2(0x0b1b38, 0.0029);
+    scene.background = new THREE.Color('#421260');
+    scene.fog = new THREE.FogExp2(0x461662, 0.0033);
 
-    // 2. Crisp Cinematic Manhattan Night Lighting
-    const hemi = new THREE.HemisphereLight(0x88bdf8, 0x223354, 1.24);
-    hemi.userData.baseIntensity = 1.24;
+    // 2. Cinematic Synthwave Sunset + Neon Cyber-Rim Manhattan Lighting
+    const hemi = new THREE.HemisphereLight(0xff7ec8, 0x262858, 1.38);
+    hemi.userData.baseIntensity = 1.38;
     this.group.add(hemi);
 
-    const moonDir = new THREE.DirectionalLight(0xaad2ff, 1.55);
-    moonDir.position.set(-46, 68, 38);
-    moonDir.castShadow = true;
-    moonDir.shadow.mapSize.set(1024, 1024);
-    moonDir.shadow.camera.near = 6;
-    moonDir.shadow.camera.far = 175;
-    moonDir.shadow.camera.left = -56;
-    moonDir.shadow.camera.right = 56;
-    moonDir.shadow.camera.top = 56;
-    moonDir.shadow.camera.bottom = -56;
-    moonDir.shadow.bias = -0.0008;
-    this.group.add(moonDir);
+    // Primary golden-coral sunlight streaming straight from the giant setting sun down Broadway!
+    const sunLight = new THREE.DirectionalLight(0xffb482, 1.62);
+    sunLight.position.set(-24, 62, -108);
+    sunLight.castShadow = true;
+    sunLight.shadow.mapSize.set(1024, 1024);
+    sunLight.shadow.camera.near = 6;
+    sunLight.shadow.camera.far = 195;
+    sunLight.shadow.camera.left = -56;
+    sunLight.shadow.camera.right = 56;
+    sunLight.shadow.camera.top = 56;
+    sunLight.shadow.camera.bottom = -56;
+    sunLight.shadow.bias = -0.0008;
+    this.group.add(sunLight);
 
-    const skylineRim = new THREE.DirectionalLight(0x46b8ff, 0.72);
-    skylineRim.position.set(44, 34, -48);
+    // Contrasting electric cyan-blue skyscraper rim light (matches cyan-lit towers against the pink sunset!)
+    const skylineRim = new THREE.DirectionalLight(0x3cc8ff, 0.86);
+    skylineRim.position.set(48, 34, 46);
     this.group.add(skylineRim);
 
     const addCityGlow = (x: number, y: number, z: number, color: number, intensity: number, dist: number) => {
@@ -446,10 +562,10 @@ export class DowntownLevelBuilder {
     const wispCol = new Float32Array(wispCount * 3);
     const wispPhase = new Float32Array(wispCount);
     const mistPalette = [
-      new THREE.Color(0x74dcff), // Electric Times Square Cyan Mist
-      new THREE.Color(0xa6c8ff), // Midnight Silver-Blue Mist
-      new THREE.Color(0xd87eff), // Subtle Neon Violet-Magenta Mist
-      new THREE.Color(0x5ef0e8), // Cool Aqua City Haze
+      new THREE.Color(0xff6ac8), // Synthwave Sunset Magenta Mist
+      new THREE.Color(0xffb474), // Warm Golden Sunset Peach Mist
+      new THREE.Color(0xc46eff), // Electric Twilight Violet Mist
+      new THREE.Color(0x64dcff), // Contrasting Times Square Cyan Mist
     ];
     for (let i = 0; i < wispCount; i++) {
       wispPos[i * 3] = (Math.random() - 0.5) * 96;
@@ -539,6 +655,12 @@ export class DowntownLevelBuilder {
       for (const pl of this.pulseLights) {
         if (!pl.light.visible) continue;
         pl.light.intensity = pl.base + Math.sin(elapsed * 1.9 + pl.phase) * 7;
+      }
+
+      // Live alternating NYPD Police, FDNY Fire Engine, Ambulance & DSNY rooftop emergency LED lightbars!
+      for (const em of this.emergencyLights) {
+        const flash = Math.sin(elapsed * 9.5 + em.phase) > 0;
+        em.mat.color.setHex(flash ? em.colorA : em.colorB);
       }
 
       if (wispPoints.visible) {
@@ -1130,14 +1252,34 @@ export class DowntownLevelBuilder {
       this.group.add(slope);
     }
     for (const sx of [-1.75, 1.75]) {
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.72, 8.2), matBridge);
-      rail.position.set(28 + sx, 1.18, -34.5);
-      this.group.add(rail);
-      for (const lz of [-3.6, 0, 3.6]) {
-        const orb = new THREE.Mesh(new THREE.SphereGeometry(0.15, 8, 6), matWarmLantern);
-        orb.position.set(28 + sx, 1.66, -34.5 + lz);
-        this.group.add(orb);
+      // Center horizontal parapet sitting flush on deckMid
+      const midParapet = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.78, 3.4), matBridge);
+      midParapet.position.set(28 + sx, 1.38, -34.5);
+      this.group.add(midParapet);
+
+      // Sloped side parapets following BOTH bridge ramps all the way down to ground!
+      for (const sz of [-1, 1]) {
+        const slopeParapet = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.78, 3.2), matBridge);
+        slopeParapet.position.set(28 + sx, 0.88, -34.5 + sz * 2.9);
+        slopeParapet.rotation.x = sz * 0.32;
+        this.group.add(slopeParapet);
+
+        // Grounded stone end-pier + lantern post at each bridge entrance
+        const endPier = new THREE.Mesh(new THREE.BoxGeometry(0.26, 1.05, 0.26), matBridge);
+        endPier.position.set(28 + sx, 0.525, -34.5 + sz * 4.35);
+        this.group.add(endPier);
+        const endOrb = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 6), matWarmLantern);
+        endOrb.position.set(28 + sx, 1.15, -34.5 + sz * 4.35);
+        this.group.add(endOrb);
       }
+
+      // Mid-bridge lantern pier seated directly on deckMid
+      const midPier = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.96, 0.24), matBridge);
+      midPier.position.set(28 + sx, 1.48, -34.5);
+      this.group.add(midPier);
+      const midOrb = new THREE.Mesh(new THREE.SphereGeometry(0.15, 8, 6), matWarmLantern);
+      midOrb.position.set(28 + sx, 2.06, -34.5);
+      this.group.add(midOrb);
     }
 
     const matWood = this.getColorMat(0x6e472d, 0.8, 0.05);
@@ -1205,12 +1347,13 @@ export class DowntownLevelBuilder {
       return s / 0xffffffff;
     };
 
-    const treeId = DOWNTOWN_TREE_GLBS[idx % DOWNTOWN_TREE_GLBS.length];
-    // Crisp urban street-tree proportions on sidewalks (never clipping building walls); lush tall trees in Central Park!
-    const targetH = parkTree ? 6.0 + rand() * 2.2 : 4.4 + rand() * 0.85;
+    const speciesCycle: DowntownTreeSpecies[] = parkTree
+      ? ['greenOak', 'goldenAutumn', 'silverWillow', 'crimsonMaple', 'greenOak', 'goldenAutumn']
+      : ['greenOak', 'goldenAutumn', 'greenOak', 'crimsonMaple'];
+    const species = speciesCycle[idx % speciesCycle.length];
+    // Realistic tall Central Park canopy trees & refined urban sidewalk avenue trees!
+    const targetH = parkTree ? 6.6 + rand() * 2.2 : 4.8 + rand() * 0.9;
     const rotY = rand() * Math.PI * 2;
-    const foliageTints = [0x82bca8, 0xd8a868, 0x76b898, 0xd888b2, 0xc87a68, 0x6ca898];
-    const fTint = foliageTints[idx % foliageTints.length];
 
     // Authentic NYC square granite tree-pit curb & soil bed beneath every sidewalk street tree!
     if (!parkTree) {
@@ -1224,14 +1367,15 @@ export class DowntownLevelBuilder {
       this.group.add(soil);
     }
 
-    const anchor = new THREE.Group();
-    anchor.position.set(x, 0, z);
-    // Keep essential park & avenue trees on LOW END DEVICE; hide secondary dense park trees on LOW END!
+    // Photorealistic forked bark trunk + layered arched botanical alpha-cutout leaf cards!
+    // Attached directly to this.group so batchStaticMeshes() merges all 30 trees into just 6 ultra-fast draw calls!
+    const treeGroup = buildRealisticDowntownTree(species, targetH, idx + (parkTree ? 100 : 0));
+    treeGroup.position.set(x, 0, z);
+    treeGroup.rotation.y = rotY;
     if (parkTree && idx >= 11) {
-      this.highTierGlbRoot.add(anchor);
-    } else {
-      this.glbRoot.add(anchor);
+      this.markHighTier(treeGroup);
     }
+    this.group.add(treeGroup);
 
     this.colliders.push({
       minX: x - 0.34,
@@ -1240,15 +1384,6 @@ export class DowntownLevelBuilder {
       maxY: 3.4,
       minZ: z - 0.34,
       maxZ: z + 0.34,
-    });
-
-    void loadDowntownGlb(`trees/${treeId}.glb`, 45).then((tpl) => {
-      if (!tpl) return;
-      const inst = fitGlbInstance(tpl, { uniformHeight: targetH, rotY });
-      // Seat trunk cleanly 0.12m into the soil/grass so zero roots ever float!
-      inst.position.y = -0.12;
-      styleGlbTreeForMidnightNyc(inst, fTint);
-      anchor.add(inst);
     });
   }
 
@@ -1728,12 +1863,12 @@ export class DowntownLevelBuilder {
     x: number,
     z: number,
     rotY: number,
-    glbId: DowntownCarGlbId,
+    vehicleType: DowntownVehicleType,
     targetLen: number,
     targetH: number,
     tintHex?: number
   ): void {
-    const approxW = targetLen > 5.6 ? 2.3 : 1.95;
+    const approxW = targetLen > 5.6 ? 2.28 : 1.94;
     const c = Math.abs(Math.cos(rotY));
     const s = Math.abs(Math.sin(rotY));
     const bw = approxW * c + targetLen * s;
@@ -1750,81 +1885,36 @@ export class DowntownLevelBuilder {
     });
     this.minimapRects.push({ x, z, w: bw, d: bd, kind: 'crate' });
 
-    const anchor = new THREE.Group();
-    anchor.position.set(x, 0, z);
-    anchor.rotation.y = rotY;
-    this.glbRoot.add(anchor);
+    const built = buildRealisticDowntownVehicle(vehicleType, tintHex);
+    built.group.position.set(x, 0, z);
+    built.group.rotation.y = rotY;
+    this.glbRoot.add(built.group);
 
-    // Subtle High-Tier evening asphalt headlight & taillight glow pools!
-    const headPool = new THREE.Mesh(
-      new THREE.PlaneGeometry(approxW * 1.1, 2.6),
-      new THREE.MeshBasicMaterial({
-        color: 0xffdf9a,
-        transparent: true,
-        opacity: 0.14,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-      })
-    );
-    headPool.rotation.x = -Math.PI / 2;
-    headPool.position.set(0, 0.036, targetLen * 0.5 + 1.25);
-    this.markHighTier(headPool);
-    anchor.add(headPool);
-
-    const tailPool = new THREE.Mesh(
-      new THREE.PlaneGeometry(approxW * 1.0, 1.7),
-      new THREE.MeshBasicMaterial({
-        color: 0xff2240,
-        transparent: true,
-        opacity: 0.14,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-      })
-    );
-    tailPool.rotation.x = -Math.PI / 2;
-    tailPool.position.set(0, 0.036, -targetLen * 0.5 - 0.8);
-    this.markHighTier(tailPool);
-    anchor.add(tailPool);
-
-    // Load real sculpted 3D GLB car model & register its meshes for exact bullet spark raycasts!
-    void loadDowntownGlb(`cars/${glbId}.glb`, 48).then((tpl) => {
-      if (!tpl) return;
-      const inst = fitGlbInstance(tpl, { uniformHeight: targetH });
-      // Ensure car length feels authentic NYC scale
-      const measured = new THREE.Box3().setFromObject(inst);
-      const mSize = new THREE.Vector3();
-      measured.getSize(mSize);
-      if (mSize.z > 0.1) {
-        const lenCorr = THREE.MathUtils.clamp(targetLen / mSize.z, 0.78, 1.35);
-        inst.scale.multiplyScalar(lenCorr);
-      }
-      styleGlbCarForMidnightNyc(inst, tintHex);
-      anchor.add(inst);
-      inst.traverse((o) => {
-        if (o instanceof THREE.Mesh) {
-          this.raycastMeshes.push(o);
-        }
-      });
-    });
+    for (const rm of built.raycastMeshes) {
+      this.raycastMeshes.push(rm);
+    }
+    for (const em of built.emergencyLights) {
+      this.emergencyLights.push(em);
+    }
   }
 
   private buildUniqueGlbVehicles(): void {
-    // 14 COMPLETELY DIFFERENT REAL 3D GLB VEHICLES positioned cleanly along Manhattan avenues!
-    const placements: Array<[number, number, number, DowntownCarGlbId, number, number, number?]> = [
-      [-15.2, 21.0, 0.04, 'taxi', 4.5, 1.65], // Classic NYC Yellow Taxi on Broadway
-      [-20.8, 15.2, Math.PI - 0.03, 'police', 4.7, 1.7], // NYPD Police Cruiser near Times Square
-      [-15.4, -14.0, -0.04, 'race-future', 4.6, 1.32, 0x72e6ff], // Neon Cyber Hypercar North Broadway
-      [-6.5, 4.5, Math.PI * 0.5 + 0.02, 'delivery', 5.8, 2.55], // Midtown Delivery Truck on 42nd St
-      [16.8, 22.0, 0.03, 'sedan-sports', 4.6, 1.5, 0xff6276], // Sports Coupe on 5th Ave
-      [22.4, 15.0, Math.PI, 'van', 5.1, 2.15, 0xa8c8ff], // Commercial Van on 5th Ave
-      [5.8, 35.5, -Math.PI * 0.5 + 0.03, 'sedan', 4.6, 1.6, 0x98b4dc], // Executive Sedan on 36th St
-      [-8.5, 35.5, Math.PI * 0.5 - 0.04, 'firetruck', 6.8, 2.75], // FDNY Firetruck on 36th St
-      [22.2, -4.8, Math.PI, 'garbage-truck', 6.4, 2.65], // NYC Sanitation Truck East 5th Ave
-      [8.2, 4.5, -Math.PI * 0.5, 'suv-luxury', 4.9, 1.85, 0x82d4f0], // Luxury Cyber SUV on 42nd St
-      [-33.0, 4.5, Math.PI * 0.5 - 0.03, 'suv', 4.7, 1.82], // Midtown SUV West 42nd St
-      [34.0, 4.5, -Math.PI * 0.5 + 0.03, 'truck', 5.6, 2.35], // Freight Truck East 42nd St
-      [-21.0, -31.0, 0.06, 'ambulance', 5.6, 2.45], // FDNY Ambulance near Central Park West
-      [-4.2, -19.0, Math.PI * 0.5, 'hatchback-sports', 4.1, 1.55, 0x78f0c8], // Compact Sport Hatch 52nd St
+    // 14 SLEEK CURVED PBR NYC VEHICLES positioned cleanly along Manhattan avenues!
+    const placements: Array<[number, number, number, DowntownVehicleType, number, number, number?]> = [
+      [-15.2, 21.0, 0.04, 'taxi', 4.78, 1.52], // Classic NYC Yellow Medallion Taxi on Broadway
+      [-20.8, 15.2, Math.PI - 0.03, 'police', 4.78, 1.56], // NYPD Interceptor Cruiser w/ Flashing Lightbar
+      [-15.4, -14.0, -0.04, 'race-future', 4.65, 1.2, 0x22ccf2], // Low-Slung Cyber Hypercar North Broadway
+      [-6.5, 4.5, Math.PI * 0.5 + 0.02, 'delivery', 5.8, 2.72], // Midtown Express Delivery Truck on 42nd St
+      [16.8, 22.0, 0.03, 'sedan-sports', 4.65, 1.4, 0xd4223c], // Candy-Crimson Sport Coupe on 5th Ave
+      [22.4, 15.0, Math.PI, 'van', 5.2, 2.22, 0x5c7292], // Modern Metallic Sprinter Van on 5th Ave
+      [5.8, 35.5, -Math.PI * 0.5 + 0.03, 'sedan', 4.78, 1.48, 0x3b4e6c], // Midnight-Silver Executive Sedan on 36th St
+      [-8.5, 35.5, Math.PI * 0.5 - 0.04, 'firetruck', 6.8, 2.74], // FDNY Engine 54 Firetruck w/ Aerial Ladder
+      [22.2, -4.8, Math.PI, 'garbage-truck', 6.2, 2.66], // DSNY NYC Sanitation Truck East 5th Ave
+      [8.2, 4.5, -Math.PI * 0.5, 'suv-luxury', 5.02, 1.82, 0x1a2234], // Obsidian Luxury SUV on 42nd St
+      [-33.0, 4.5, Math.PI * 0.5 - 0.03, 'suv', 4.76, 1.82, 0x3c5274], // Sapphire Midtown SUV West 42nd St
+      [34.0, 4.5, -Math.PI * 0.5 + 0.03, 'truck', 5.8, 2.72], // Commercial Freight Truck East 42nd St
+      [-21.0, -31.0, 0.06, 'ambulance', 5.6, 2.48], // FDNY EMS Ambulance near Central Park West
+      [-4.2, -19.0, Math.PI * 0.5, 'hatchback-sports', 4.22, 1.46, 0x24b890], // Emerald Sport Hatch 52nd St
     ];
     for (const [vx, vz, rot, id, len, h, tint] of placements) {
       this.addGlbVehicle(vx, vz, rot, id, len, h, tint);
@@ -1934,8 +2024,6 @@ export class DowntownLevelBuilder {
     const matHydrant = this.getColorMat(0xb8222a, 0.42, 0.35);
     const matSignGreen = this.getColorMat(0x146c44, 0.5, 0.2);
     const matGlass = this.getColorMat(0x22466a, 0.14, 0.72, 0x1e4c78, 0.28);
-    const matCraneYellow = this.getColorMat(0xd49622, 0.52, 0.42);
-    const matRedBeacon = this.getBasicMat(0xff2c48);
     const matWarmGlow = this.getBasicMat(0xffe4a8);
 
     // 1. Cast-Iron NYC Zig-Zag Fire Escapes
@@ -2099,24 +2187,6 @@ export class DowntownLevelBuilder {
         this.highTierGlbRoot.add(inst);
       }
     });
-
-    // 6. Iconic Lit Manhattan Skyscraper Construction Tower Crane rising behind the NW skyline!
-    const crane = new THREE.Group();
-    crane.position.set(-54, 0, -56);
-    this.markHighTier(crane);
-    const mast = new THREE.Mesh(new THREE.BoxGeometry(1.8, 108, 1.8), matCraneYellow);
-    mast.position.y = 54;
-    crane.add(mast);
-    const jib = new THREE.Mesh(new THREE.BoxGeometry(44, 1.6, 1.4), matCraneYellow);
-    jib.position.set(12, 106, 0);
-    jib.rotation.y = 0.42;
-    crane.add(jib);
-    for (const bx of [-6, 12, 30]) {
-      const light = new THREE.Mesh(new THREE.SphereGeometry(0.42, 7, 6), matRedBeacon);
-      light.position.set(bx, 107.6, -bx * 0.4);
-      crane.add(light);
-    }
-    this.group.add(crane);
   }
 
   // =========================================================================
@@ -2252,10 +2322,10 @@ export class DowntownLevelBuilder {
     const glowCycle = [0x42e8ff, 0xff46b8, 0xffe298, 0x4aa8ff, 0x56ffc8, 0xff62a8];
 
     const outerTowers: Array<[number, number, number, number, number, boolean]> = [
-      [-54, -74, 22, 20, 88, false],
-      [-28, -76, 20, 18, 108, false],
-      [-4, -80, 16, 16, 124, false],
-      [20, -78, 22, 20, 84, false],
+      [-56, -74, 22, 20, 88, false],
+      [-38, -78, 18, 18, 108, false],
+      [6, -82, 16, 16, 118, false],
+      [24, -78, 22, 20, 84, false],
       [46, -75, 20, 18, 98, false],
       [70, -64, 22, 20, 78, false],
       [76, -34, 22, 20, 92, false],

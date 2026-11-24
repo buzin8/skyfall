@@ -244,10 +244,9 @@ export function preloadDowntownGlbs(): void {
   if (preloadStarted) return;
   preloadStarted = true;
 
-  // Preload all 11 photorealistic Manhattan building/billboard/road JPG textures right alongside the 3D GLBs!
+  // Preload all 11 photorealistic Manhattan building/billboard/road JPG textures + rigged NPCs & street props!
+  // (Realistic curved PBR NYC vehicles & botanical alpha-leaf trees build synchronously with zero GLB wait!)
   getDowntownTextures();
-  for (const c of DOWNTOWN_CAR_GLBS) void loadDowntownGlb(`cars/${c}.glb`, 48);
   for (const n of DOWNTOWN_NPC_GLBS) void loadDowntownGlb(`npcs/${n}.glb`, 62);
-  for (const t of DOWNTOWN_TREE_GLBS) void loadDowntownGlb(`trees/${t}.glb`, 45);
   for (const p of DOWNTOWN_PROP_GLBS) void loadDowntownGlb(`props/${p}.glb`, 45);
 }

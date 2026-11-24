@@ -1119,11 +1119,11 @@ class SkyfallGame {
       const clean = sanitizePlayerName(nameInput.value);
       if (clean) localStorage.setItem('skyfall_tdm_name', clean);
       const started = this.mp.joinLobby(nameInput.value, codeInput.value);
-      if (started) {
+      if (started && !this.mp.connected) {
         this.setTdmJoinButtonBusy(true);
-      } else if (!clean) {
+      } else if (!started && !clean) {
         nameInput.focus();
-      } else {
+      } else if (!started) {
         codeInput.focus();
       }
     });

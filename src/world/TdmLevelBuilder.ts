@@ -1298,19 +1298,28 @@ export class TdmLevelBuilder {
       stringer.rotation.x = slopeAngle;
       this.group.add(stringer);
 
-      // Top landing short horizontal rail connecting into the 2nd floor edge
-      const topRail = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.14, landingLen), matRail);
+      // Top landing short horizontal rail & mid-guardrail connecting into the 2nd floor edge
+      const topRail = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.14, landingLen + 0.06), matRail);
       topRail.position.set(rx, FLOOR2_Y + 0.96, landingCenterZ);
       this.group.add(topRail);
 
-      for (let p = 0; p <= 3; p++) {
-        const f = p / 3;
+      const midGuard = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, slopeLen), matRail);
+      midGuard.position.set(rx, FLOOR2_Y * 0.5 + 0.48, midZ);
+      midGuard.rotation.x = slopeAngle;
+      this.group.add(midGuard);
+
+      for (let p = 0; p <= 5; p++) {
+        const f = p / 5;
         const pz = startZ + f * slopeRun;
         const py = f * FLOOR2_Y;
-        const post = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.05, 0.12), matRail);
-        post.position.set(rx, py + 0.52, pz);
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.12, 0.12), matRail);
+        post.position.set(rx, py + 0.44, pz);
         this.group.add(post);
       }
+
+      const endPost = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.12, 0.12), matRail);
+      endPost.position.set(rx, FLOOR2_Y + 0.44, endZ);
+      this.group.add(endPost);
 
       // Thin side rail guard collider (inset slightly at entry/exit so angled entry never snags!)
       this.colliders.push({
