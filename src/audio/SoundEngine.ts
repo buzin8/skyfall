@@ -178,23 +178,63 @@ export class SoundEngine {
     bolt.stop(now + 0.055);
   }
 
-  public playGhostShot(): void {
+  /**
+   * Tight bullpup 5.56mm Steyr AUG A4 shot — crisp high-velocity snap + distinctive polymer resonance.
+   */
+  public playAugShot(distanceAttenuation = 1): void {
     if (!this.ctx || !this.masterGain || !this.noiseBuffer) return;
     const now = this.ctx.currentTime;
+    const vol = Math.max(0.05, Math.min(1, distanceAttenuation));
 
-    // Silenced snappy sidearm pop
     const osc = this.ctx.createOscillator();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(320, now);
-    osc.frequency.exponentialRampToValueAtTime(75, now + 0.055);
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(245, now);
+    osc.frequency.exponentialRampToValueAtTime(58, now + 0.064);
 
     const oscGain = this.ctx.createGain();
-    oscGain.gain.setValueAtTime(0.38, now);
-    oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.065);
+    oscGain.gain.setValueAtTime(0.54 * vol, now);
+    oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.082);
     osc.connect(oscGain);
     oscGain.connect(this.masterGain);
     osc.start(now);
-    osc.stop(now + 0.07);
+    osc.stop(now + 0.09);
+
+    const crack = this.ctx.createBufferSource();
+    crack.buffer = this.noiseBuffer;
+    const crackFilter = this.ctx.createBiquadFilter();
+    crackFilter.type = 'bandpass';
+    crackFilter.frequency.setValueAtTime(3100, now);
+    crackFilter.frequency.exponentialRampToValueAtTime(1150, now + 0.06);
+    crackFilter.Q.value = 1.5;
+
+    const crackGain = this.ctx.createGain();
+    crackGain.gain.setValueAtTime(0.74 * vol, now);
+    crackGain.gain.exponentialRampToValueAtTime(0.001, now + 0.105);
+    crack.connect(crackFilter);
+    crackFilter.connect(crackGain);
+    crackGain.connect(this.masterGain);
+    crack.start(now);
+    crack.stop(now + 0.115);
+  }
+
+  public playGhostShot(distanceAttenuation = 1): void {
+    if (!this.ctx || !this.masterGain || !this.noiseBuffer) return;
+    const now = this.ctx.currentTime;
+    const vol = Math.max(0.05, Math.min(1, distanceAttenuation));
+
+    // Snappy tactical 9mm sidearm crack
+    const osc = this.ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(340, now);
+    osc.frequency.exponentialRampToValueAtTime(78, now + 0.055);
+
+    const oscGain = this.ctx.createGain();
+    oscGain.gain.setValueAtTime(0.46 * vol, now);
+    oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.068);
+    osc.connect(oscGain);
+    oscGain.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.072);
 
     const puff = this.ctx.createBufferSource();
     puff.buffer = this.noiseBuffer;

@@ -1,63 +1,46 @@
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { createDracoGltfLoader } from '../utils/GlbLoader';
 import { smoothGeometryNormals } from '../utils/MeshSmoothing';
-import { getDowntownTextures } from './DowntownTextures';
+
+export const DOWNTOWN_CITY_GLB = 'city/cyberpunk_city.glb';
+export const DOWNTOWN_CITY_LOW_GLB = 'city/cyberpunk_city_low.glb';
 
 export const DOWNTOWN_CAR_GLBS = [
-  'taxi',
-  'police',
-  'race-future',
-  'delivery',
-  'sedan-sports',
-  'van',
-  'sedan',
-  'truck',
-  'garbage-truck',
-  'suv-luxury',
-  'suv',
-  'firetruck',
-  'ambulance',
-  'hatchback-sports',
+  'lambo_aventador',
+  'lambo_revuelto',
+  'viper_patrol',
+  'mercedes_amg_gt',
+  'corvette_c8',
+  'challenger_hellcat',
+  'ford_mustang',
+  'camaro_zl1',
+  'vw_golf_gti',
+  'honda_integra',
 ] as const;
 export type DowntownCarGlbId = (typeof DOWNTOWN_CAR_GLBS)[number];
 
-export const DOWNTOWN_NPC_GLBS = [
-  'man_casual',
-  'woman_casual',
-  'man_suit',
-  'woman_formal',
-  'man_casual2',
-  'woman_suit',
-  'man_punk',
-  'woman_punk',
-  'man_worker',
-  'woman_scifi',
-  'cyber_char',
+/** Neutral T-pose / A-pose rigged NPCs that actively walk & roam freely across Cyberpunk City! */
+export const DOWNTOWN_WALKER_NPCS = [
+  'zira_isaac',
+  'android18',
+  'hinata',
+  'outis',
+  'cammy',
+  'sakura',
 ] as const;
+
+/** Stylish standing-pose NPCs that hang out naturally beside supercars & storefronts! */
+export const DOWNTOWN_CROWD_NPCS = [
+  'mai',
+  'kayden',
+  'office_elegance',
+  'unboxing_allure',
+  'gangsta_girl',
+] as const;
+
+export const DOWNTOWN_NPC_GLBS = [...DOWNTOWN_WALKER_NPCS, ...DOWNTOWN_CROWD_NPCS] as const;
 export type DowntownNpcGlbId = (typeof DOWNTOWN_NPC_GLBS)[number];
-
-export const DOWNTOWN_TREE_GLBS = [
-  'CommonTree_1',
-  'CommonTree_2',
-  'CommonTree_Autumn_1',
-  'CommonTree_Autumn_3',
-  'BirchTree_1',
-  'BirchTree_Autumn_2',
-  'Willow_1',
-  'Willow_Autumn_1',
-  'PineTree_1',
-  'PineTree_3',
-] as const;
-export type DowntownTreeGlbId = (typeof DOWNTOWN_TREE_GLBS)[number];
-
-export const DOWNTOWN_PROP_GLBS = [
-  'TrafficLight',
-  'Streetlight_Double',
-  'AC_Stacked',
-  'Antenna_2',
-] as const;
-export type DowntownPropGlbId = (typeof DOWNTOWN_PROP_GLBS)[number];
 
 export interface LoadedGlbTemplate {
   scene: THREE.Group;
@@ -66,11 +49,37 @@ export interface LoadedGlbTemplate {
   rawSize: THREE.Vector3;
 }
 
-const gltfLoader = new GLTFLoader();
+const gltfLoader = createDracoGltfLoader();
 const templateCache = new Map<string, LoadedGlbTemplate>();
 const inflightCache = new Map<string, Promise<LoadedGlbTemplate | null>>();
 
-export function loadDowntownGlb(relPath: string, creaseAngle = 52): Promise<LoadedGlbTemplate | null> {
+// Concurrency-limited Draco GLB load queue (max 2 concurrent decodes so low-end laptops NEVER freeze or OOM!)
+const MAX_CONCURRENT_GLBS = 2;
+let activeGlbLoads = 0;
+const glbLoadQueue: Array<() => void> = [];
+
+function runQueuedGlbLoad<T>(priority: boolean, fn: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve) => {
+    const start = () => {
+      activeGlbLoads++;
+      fn().then((res) => {
+        activeGlbLoads--;
+        const next = glbLoadQueue.shift();
+        if (next) next();
+        resolve(res);
+      });
+    };
+    if (activeGlbLoads < MAX_CONCURRENT_GLBS) {
+      start();
+    } else if (priority) {
+      glbLoadQueue.unshift(start);
+    } else {
+      glbLoadQueue.push(start);
+    }
+  });
+}
+
+export function loadDowntownGlb(relPath: string, creaseAngle = 0): Promise<LoadedGlbTemplate | null> {
   const existing = templateCache.get(relPath);
   if (existing) return Promise.resolve(existing);
 
@@ -78,55 +87,62 @@ export function loadDowntownGlb(relPath: string, creaseAngle = 52): Promise<Load
   if (pending) return pending;
 
   const baseUrl = `/models/downtown/${relPath}`;
-  const promise = new Promise<LoadedGlbTemplate | null>((resolve) => {
-    const attempt = (retriesLeft: number) => {
-      const url = retriesLeft === 2 ? baseUrl : `${baseUrl}?r=${2 - retriesLeft}`;
-      gltfLoader.load(
-        url,
-        (gltf) => {
-          gltf.scene.updateMatrixWorld(true);
-          gltf.scene.traverse((obj) => {
-            const mesh = obj as THREE.Mesh;
-            if (mesh.isMesh && mesh.geometry) {
-              smoothGeometryNormals(mesh.geometry, creaseAngle);
-              mesh.frustumCulled = true;
+  const isCityPriority = relPath.startsWith('city/');
+  const promise = runQueuedGlbLoad(
+    isCityPriority,
+    () =>
+      new Promise<LoadedGlbTemplate | null>((resolve) => {
+        const attempt = (retriesLeft: number) => {
+          const url = retriesLeft === 2 ? baseUrl : `${baseUrl}?r=${2 - retriesLeft}`;
+          gltfLoader.load(
+            url,
+            (gltf) => {
+              gltf.scene.updateMatrixWorld(true);
+              gltf.scene.traverse((obj) => {
+                const mesh = obj as THREE.Mesh;
+                if (mesh.isMesh && mesh.geometry) {
+                  if (creaseAngle > 0) {
+                    smoothGeometryNormals(mesh.geometry, creaseAngle);
+                  }
+                  mesh.frustumCulled = true;
+                }
+              });
+              const rawBox = new THREE.Box3().setFromObject(gltf.scene);
+              const rawSize = new THREE.Vector3();
+              rawBox.getSize(rawSize);
+              const tpl: LoadedGlbTemplate = {
+                scene: gltf.scene,
+                animations: gltf.animations || [],
+                rawBox,
+                rawSize,
+              };
+              templateCache.set(relPath, tpl);
+              inflightCache.delete(relPath);
+              resolve(tpl);
+            },
+            undefined,
+            (err) => {
+              if (retriesLeft > 0) {
+                window.setTimeout(() => attempt(retriesLeft - 1), (3 - retriesLeft) * 700);
+                return;
+              }
+              console.warn(`[DowntownGlbAssets] Failed loading ${baseUrl}:`, err);
+              inflightCache.delete(relPath);
+              resolve(null);
             }
-          });
-          const rawBox = new THREE.Box3().setFromObject(gltf.scene);
-          const rawSize = new THREE.Vector3();
-          rawBox.getSize(rawSize);
-          const tpl: LoadedGlbTemplate = {
-            scene: gltf.scene,
-            animations: gltf.animations || [],
-            rawBox,
-            rawSize,
-          };
-          templateCache.set(relPath, tpl);
-          inflightCache.delete(relPath);
-          resolve(tpl);
-        },
-        undefined,
-        (err) => {
-          if (retriesLeft > 0) {
-            window.setTimeout(() => attempt(retriesLeft - 1), (3 - retriesLeft) * 700);
-            return;
-          }
-          console.warn(`[DowntownGlbAssets] Failed loading ${baseUrl}:`, err);
-          inflightCache.delete(relPath);
-          resolve(null);
-        }
-      );
-    };
-    attempt(2);
-  });
+          );
+        };
+        attempt(2);
+      })
+  );
 
   inflightCache.set(relPath, promise);
   return promise;
 }
 
 /**
- * Fits a cloned GLB cleanly into target (width, height, depth) or uniform height, grounded flush at y = 0
- * and centered on X/Z so every building, car, tree, and NPC sits perfectly on the Manhattan street!
+ * Fits a cloned GLB cleanly into target length / uniform height, grounded flush at y = 0
+ * and centered on X/Z so every supercar & NPC sits perfectly on the Cyberpunk City boulevard!
  */
 export function fitGlbInstance(
   tpl: LoadedGlbTemplate,
@@ -136,6 +152,7 @@ export function fitGlbInstance(
     targetW?: number;
     targetD?: number;
     uniformHeight?: number;
+    uniformLength?: number;
     rotY?: number;
   }
 ): THREE.Group {
@@ -149,8 +166,20 @@ export function fitGlbInstance(
   let scaleX = 1;
   let scaleY = 1;
   let scaleZ = 1;
+  let autoRotY = 0;
+
   if (opts.uniformHeight !== undefined) {
     const s = opts.uniformHeight / sy;
+    scaleX = s;
+    scaleY = s;
+    scaleZ = s;
+  } else if (opts.uniformLength !== undefined) {
+    // Auto-align long horizontal axis of car onto Z if exported sideways along X!
+    if (sx > sz * 1.15) {
+      autoRotY = Math.PI / 2;
+    }
+    const maxHoriz = Math.max(sx, sz);
+    const s = opts.uniformLength / maxHoriz;
     scaleX = s;
     scaleY = s;
     scaleZ = s;
@@ -161,6 +190,7 @@ export function fitGlbInstance(
   }
 
   clone.scale.set(scaleX, scaleY, scaleZ);
+  if (autoRotY) clone.rotation.y += autoRotY;
   clone.updateMatrixWorld(true);
 
   const box = new THREE.Box3().setFromObject(clone);
@@ -175,10 +205,9 @@ export function fitGlbInstance(
 }
 
 /**
- * Styles real 3D GLB cars with glossy automotive paint & subtle midnight-NYC metallic reflections!
+ * Enhances real 3D downloaded supercars for vibrant synthwave-sunset & neon Cyberpunk Downtown reflections!
  */
-export function styleGlbCarForMidnightNyc(root: THREE.Object3D, tintHex?: number): void {
-  const tint = tintHex ? new THREE.Color(tintHex) : null;
+export function styleGlbCarForCyberpunkDowntown(root: THREE.Object3D): void {
   root.traverse((obj) => {
     const mesh = obj as THREE.Mesh;
     if (!mesh.isMesh) return;
@@ -189,43 +218,26 @@ export function styleGlbCarForMidnightNyc(root: THREE.Object3D, tintHex?: number
       const m = orig.clone() as THREE.MeshStandardMaterial;
       if (!m.isMeshStandardMaterial) return m;
       m.flatShading = false;
-      if (tint) m.color.multiply(tint);
-      m.roughness = 0.28;
-      m.metalness = 0.46;
-      m.envMapIntensity = 1.3;
-      m.emissive.setHex(0x0d172c);
-      m.emissiveIntensity = 0.25;
-      m.needsUpdate = true;
-      return m;
-    });
-    mesh.material = Array.isArray(mesh.material) ? next : next[0];
-  });
-}
-
-/**
- * Styles real 3D GLB trees for luminous midnight Central Park & Manhattan avenues!
- */
-export function styleGlbTreeForMidnightNyc(root: THREE.Object3D, foliageTintHex?: number): void {
-  const fTint = foliageTintHex ? new THREE.Color(foliageTintHex) : new THREE.Color(0x88b4cc);
-  root.traverse((obj) => {
-    const mesh = obj as THREE.Mesh;
-    if (!mesh.isMesh) return;
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-    const next = mats.map((orig) => {
-      const m = orig.clone() as THREE.MeshStandardMaterial;
-      if (!m.isMeshStandardMaterial) return m;
-      m.flatShading = false;
-      const name = (m.name || '').toLowerCase();
-      if (name.includes('wood') || name.includes('bark')) {
-        m.color.multiply(new THREE.Color(0x746b68));
-        m.roughness = 0.9;
+      const nm = (m.name || '').toLowerCase();
+      if (nm.includes('glass') || nm.includes('window') || nm.includes('winsow')) {
+        m.roughness = 0.08;
+        m.metalness = 0.52;
+        m.envMapIntensity = 2.0;
+        m.emissive.setHex(0x162b46);
+        m.emissiveIntensity = 0.35;
+      } else if (nm.includes('tire') || nm.includes('tyre') || nm.includes('rubber')) {
+        m.roughness = 0.84;
+        m.metalness = 0.05;
+      } else if (nm.includes('light') || nm.includes('lamp')) {
+        m.emissiveIntensity = Math.max(m.emissiveIntensity, 1.4);
       } else {
-        m.color.multiply(fTint);
-        m.emissive.copy(m.color);
-        m.emissiveIntensity = 0.22;
-        m.roughness = 0.78;
+        m.roughness = Math.min(m.roughness, 0.32);
+        m.metalness = Math.max(m.metalness, 0.38);
+        m.envMapIntensity = 1.65;
+        if (m.emissive.r + m.emissive.g + m.emissive.b < 0.04) {
+          m.emissive.setHex(0x14192a);
+          m.emissiveIntensity = 0.22;
+        }
       }
       m.needsUpdate = true;
       return m;
@@ -237,16 +249,11 @@ export function styleGlbTreeForMidnightNyc(root: THREE.Object3D, foliageTintHex?
 let preloadStarted = false;
 
 /**
- * Background-preloads all Downtown CC0 GLB assets (cars, rigged NPCs, trees, buildings & props)
- * so entering a DOWNTOWN TDM match renders real 3D models immediately on Frame 1!
+ * Lightweight preloader: ONLY warms the active Cyberpunk City GLB (never blasts all 21 cars/NPCs upfront!),
+ * letting supercars and NPCs stream cleanly 2-at-a-time via the Draco load queue when Downtown builds!
  */
-export function preloadDowntownGlbs(): void {
+export function preloadDowntownGlbs(isLowEnd = false): void {
   if (preloadStarted) return;
   preloadStarted = true;
-
-  // Preload all 11 photorealistic Manhattan building/billboard/road JPG textures + rigged NPCs & street props!
-  // (Realistic curved PBR NYC vehicles & botanical alpha-leaf trees build synchronously with zero GLB wait!)
-  getDowntownTextures();
-  for (const n of DOWNTOWN_NPC_GLBS) void loadDowntownGlb(`npcs/${n}.glb`, 62);
-  for (const p of DOWNTOWN_PROP_GLBS) void loadDowntownGlb(`props/${p}.glb`, 45);
+  void loadDowntownGlb(isLowEnd ? DOWNTOWN_CITY_LOW_GLB : DOWNTOWN_CITY_GLB, 0);
 }

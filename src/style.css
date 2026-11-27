@@ -1999,3 +1999,39 @@ body {
     transform-origin: bottom center;
   }
 }
+
+/* ==================== CHARACTER SELECTOR GRID & TDM CHARACTER BADGE ==================== */
+.char-pill-grid {
+  display: grid !important;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px !important;
+}
+
+.char-pill-grid .pill {
+  padding: 6px 6px !important;
+  font-size: 11px !important;
+  letter-spacing: 0.7px !important;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tdm-badge.char {
+  background: rgba(56, 224, 255, 0.16);
+  border: 1px solid rgba(56, 224, 255, 0.48);
+  color: #8cf2ff;
+}
+
+.weapon-slots {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.weapon-slots .w-slot {
+  font-size: 10.5px;
+  padding: 4px 5px;
+  text-align: center;
+  white-space: nowrap;
+}

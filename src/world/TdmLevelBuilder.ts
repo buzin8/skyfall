@@ -878,12 +878,12 @@ export class TdmLevelBuilder {
     this.tex = textures;
   }
 
-  public build(scene: THREE.Scene, mapId: MapId): BuiltLevel {
+  public build(scene: THREE.Scene, mapId: MapId, isLowEnd = false): BuiltLevel {
     if (mapId === 'factory') {
       return this.buildVikendiTdm(scene);
     }
     if (mapId === 'downtown') {
-      return new DowntownLevelBuilder().build(scene);
+      return new DowntownLevelBuilder(isLowEnd).build(scene, isLowEnd);
     }
     return this.buildWarehouseTdm(scene);
   }

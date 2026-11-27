@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { AABB, LobbyTeam, RampCollider } from '../types';
+import { AABB, CharacterId, LobbyTeam, RampCollider } from '../types';
 import { TextureLibrary } from '../textures/ProceduralTextures';
-import { AgentRig, buildAgentRig, solveTwoBoneArmIK } from './AgentModel';
+import { AgentRig, buildAgentRig, positionRigWeaponAndSolveIK, solveTwoBoneArmIK } from './AgentModel';
 import { depenetrateFromColliders, MapBounds2D, measureForwardWallClearance } from '../world/CollisionUtils';
 
 function lerpAngle(a: number, b: number, t: number): number {
@@ -20,6 +20,7 @@ export class RemotePlayer {
   public readonly id: string;
   public readonly name: string;
   public readonly team: LobbyTeam;
+  public readonly characterId?: CharacterId;
   public readonly rig: AgentRig;
 
   public pos = new THREE.Vector3();
@@ -79,13 +80,14 @@ export class RemotePlayer {
     spawnPos: THREE.Vector3,
     cameraYaw: number,
     scene: THREE.Scene,
-    textures?: TextureLibrary
+    textures?: TextureLibrary,
+    characterId?: CharacterId
   ) {
     this.id = id;
     this.name = name;
     this.team = team;
-    // Blue Team -> 'ally' (blue uniform); Red Team -> 'enemy' (red uniform)!
-    this.rig = buildAgentRig(id, team === 'blue' ? 'ally' : 'enemy', 'ember', textures);
+    this.characterId = characterId;
+    this.rig = buildAgentRig(id, team === 'blue' ? 'ally' : 'enemy', 'ember', textures, characterId);
     for (const hm of this.rig.hitMeshes) {
       hm.userData.remotePlayerId = id;
       hm.userData.agentId = undefined;
@@ -166,13 +168,7 @@ export class RemotePlayer {
       this.deathMidQuats.clear();
       this.deathTargetQuats.clear();
       this.rig.mixer?.update(0);
-      this.rig.weaponPivot.position.set(-0.165, 1.335, 0.265);
-      this.rig.weaponPivot.rotation.set(0, 0, 0);
-      if (this.rig.akmGroup && this.rig.scarGroup) {
-        this.rig.akmGroup.visible = this.weaponSlot !== 1;
-        this.rig.scarGroup.visible = this.weaponSlot === 1;
-      }
-      this.applySkinnedArmIK(0);
+      positionRigWeaponAndSolveIK(this.rig, { weaponSlot: this.weaponSlot });
     }
   }
 
@@ -415,66 +411,25 @@ export class RemotePlayer {
 
       const strideBobY = Math.sin(this.idlePhase * (spd > 0.4 ? 4.0 : 1.0)) * (spd > 0.4 ? 0.014 : 0.006);
       const strideBobX = Math.cos(this.idlePhase * 2.0) * (spd > 0.4 ? 0.008 : 0.002);
-      const runCant = wRun * 0.06;
       const aimPitch = THREE.MathUtils.clamp(-this.pitch * 0.34, -0.25, 0.25);
-      // Pivot cleanly around the right shoulder buttstock anchor so the rifle NEVER swings off-shoulder!
-      const stockYComp = -0.2 * Math.sin(aimPitch);
-      const wt = this.wallTuck;
 
-      if (this.rig.akmGroup && this.rig.scarGroup) {
-        this.rig.akmGroup.visible = this.weaponSlot !== 1;
-        this.rig.scarGroup.visible = this.weaponSlot === 1;
-      }
-
-      this.rig.weaponPivot.position.set(
-        -0.165 + strideBobX + wt * 0.05,
-        1.335 + strideBobY + stockYComp - this.crouchAmount * 0.055 + wt * 0.06,
-        0.265 - this.recoilKick * 0.042 - wt * 0.24
-      );
-      this.rig.weaponPivot.rotation.set(
-        runCant + aimPitch * (1 - wt * 0.7) - this.recoilKick * 0.1 - wt * 0.96,
-        wt * 0.22,
-        0
-      );
-
-      this.applySkinnedArmIK(aimPitch);
+      // Dynamically anchor active weapon (AKM / SCAR-H / AUG A4 / 9MM) into this character's live shoulder pocket
+      // and lock both hands squarely onto the grip & handguard (or Weaver two-handed pistol grip for 9MM)!
+      positionRigWeaponAndSolveIK(this.rig, {
+        weaponSlot: this.weaponSlot,
+        strideBobX,
+        strideBobY,
+        runCant: wRun * 0.06,
+        aimPitch,
+        recoilKick: this.recoilKick,
+        crouchAmount: this.crouchAmount,
+        wallTuck: this.wallTuck,
+      });
     }
   }
 
   public dispose(scene: THREE.Scene): void {
     scene.remove(this.rig.root);
-  }
-
-  private applySkinnedArmIK(aimPitch: number): void {
-    const b = this.rig.skBones;
-    if (!b || !this.rig.rightGripTarget || !this.rig.leftGripTarget) return;
-
-    // Natural right-handed bladed CQB stance: right shoulder slightly back, left shoulder forward toward handguard!
-    if (b.spine2) {
-      b.spine2.rotation.y -= 0.16;
-    }
-    if (b.head) {
-      b.head.rotation.y += 0.14;
-      b.head.rotation.x += aimPitch * 0.38;
-    }
-
-    this.rig.root.updateMatrixWorld(true);
-
-    if (b.rightArm && b.rightForeArm && b.rightHand) {
-      this.rig.rightGripTarget.getWorldPosition(this.ikRightTarget);
-      // Tucked downward right elbow close beside right ribcage (zero chicken-wing flare!)
-      this.ikRightPole.set(-0.34, 0.62, -0.18).applyMatrix4(this.rig.modelPivot.matrixWorld);
-      solveTwoBoneArmIK(b.rightArm, b.rightForeArm, b.rightHand, this.ikRightTarget, this.ikRightPole, 1.0);
-      b.rightHand.quaternion.set(0, 0, 0, 1);
-    }
-
-    if (b.leftArm && b.leftForeArm && b.leftHand) {
-      this.rig.leftGripTarget.getWorldPosition(this.ikLeftTarget);
-      // Tucked downward left elbow directly beneath the rifle handguard!
-      this.ikLeftPole.set(0.16, 0.56, 0.28).applyMatrix4(this.rig.modelPivot.matrixWorld);
-      solveTwoBoneArmIK(b.leftArm, b.leftForeArm, b.leftHand, this.ikLeftTarget, this.ikLeftPole, 1.0);
-      b.leftHand.quaternion.set(0, 0, 0, 1);
-    }
   }
 
   private prepareSkinnedRagdollCollapse(): void {
@@ -589,6 +544,14 @@ export class RemotePlayer {
     }
 
     if (this.rig.isSkinned && this.rig.skBones) {
+      if (this.rig.isMeterRig) {
+        const ease = 1 - Math.pow(1 - this.deathAnim, 2.4);
+        const fallAngle = (this.killPitchSign < 0 ? -Math.PI * 0.48 : Math.PI * 0.48) * ease;
+        this.rig.modelPivot.scale.set(1, 1, 1);
+        this.rig.modelPivot.rotation.set(fallAngle, this.killYawTwist * ease, this.killRollTarget * 0.55 * ease);
+        this.rig.modelPivot.position.set(0, 0.14 * ease, (this.killPitchSign < 0 ? -0.45 : 0.45) * ease);
+        return;
+      }
       const b = this.rig.skBones;
       const p = this.deathAnim;
       this.rig.modelPivot.scale.set(1, 1, 1);

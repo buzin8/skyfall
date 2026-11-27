@@ -1,7 +1,13 @@
 import * as THREE from 'three';
-import { AABB, Difficulty, RampCollider, SmokeCloud, Team, Waypoint } from '../types';
+import { AABB, CharacterId, Difficulty, RampCollider, SmokeCloud, Team, Waypoint } from '../types';
 import { TextureLibrary } from '../textures/ProceduralTextures';
-import { AgentRig, AgentVisualStyle, buildAgentRig, solveTwoBoneArmIK } from './AgentModel';
+import {
+  AgentRig,
+  AgentVisualStyle,
+  buildAgentRig,
+  positionRigWeaponAndSolveIK,
+  solveTwoBoneArmIK,
+} from './AgentModel';
 import {
   depenetrateFromColliders,
   MapBounds2D,
@@ -86,13 +92,14 @@ export class TacticalAgent {
     spawnPos: THREE.Vector3,
     spawnYaw: number,
     scene: THREE.Scene,
-    textures?: TextureLibrary
+    textures?: TextureLibrary,
+    characterId?: CharacterId
   ) {
     this.id = id;
     this.name = name;
     this.team = team;
     this.style = style;
-    this.rig = buildAgentRig(id, team, style, textures);
+    this.rig = buildAgentRig(id, team, style, textures, characterId);
     scene.add(this.rig.root);
 
     this.respawn(spawnPos, spawnYaw);
@@ -147,9 +154,7 @@ export class TacticalAgent {
       this.deathMidQuats.clear();
       this.deathTargetQuats.clear();
       this.rig.mixer?.update(0);
-      this.rig.weaponPivot.position.set(-0.145, 1.3, 0.17);
-      this.rig.weaponPivot.rotation.set(0.02, 0.06, 0);
-      this.applySkinnedArmIK();
+      positionRigWeaponAndSolveIK(this.rig, { weaponSlot: this.rig.defaultWeaponSlot ?? 0 });
     } else {
       this.rig.hips.position.set(0, 0.94, 0);
       this.rig.hips.rotation.set(0, 0, 0);
@@ -412,6 +417,15 @@ export class TacticalAgent {
       const t = this.deathAnim;
 
       if (this.rig.isSkinned && this.rig.skBones) {
+        if (this.rig.isMeterRig) {
+          // Clean smooth meter-space ragdoll collapse onto the ground for Shadow Company, Gambit, Rogue & Luffy!
+          const ease = 1 - Math.pow(1 - t, 2.4);
+          const fallAngle = (this.killPitchSign < 0 ? -Math.PI * 0.48 : Math.PI * 0.48) * ease;
+          this.rig.modelPivot.scale.y = THREE.MathUtils.lerp(this.rig.modelPivot.scale.y, 1.0, Math.min(1, dt * 8));
+          this.rig.modelPivot.rotation.set(fallAngle, this.killYawTwist * ease, this.killRollTarget * 0.55 * ease);
+          this.rig.modelPivot.position.set(0, 0.14 * ease, (this.killPitchSign < 0 ? -0.45 : 0.45) * ease);
+          return;
+        }
         const b = this.rig.skBones;
         // Reset crouch scale gently so limbs don't squash unnaturally on the floor
         this.rig.modelPivot.scale.y = THREE.MathUtils.lerp(this.rig.modelPivot.scale.y, 1.0, Math.min(1, dt * 8));
@@ -915,24 +929,18 @@ export class TacticalAgent {
       this.rig.modelPivot.rotation.z = THREE.MathUtils.clamp(-this.smoothStrafe * 0.028, -0.1, 0.1);
       this.rig.modelPivot.rotation.x = THREE.MathUtils.clamp(spd * 0.018, 0, 0.08);
 
-      // Smoothly position shouldered AKM tucked squarely into right shoulder pocket aiming dead-straight forward!
+      // Dynamically anchor weapon to this character's live shoulder pocket & lock both hands onto grip/handguard via IK!
       const strideBobY = Math.sin(this.idlePhase * (spd > 0.4 ? 4.0 : 1.0)) * (spd > 0.4 ? 0.014 : 0.006);
       const strideBobX = Math.cos(this.idlePhase * 2.0) * (spd > 0.4 ? 0.008 : 0.002);
-      const runCant = wRun * 0.06;
-      const wt = this.wallTuck;
-      this.rig.weaponPivot.position.set(
-        -0.165 + strideBobX + wt * 0.05,
-        1.335 + strideBobY - this.crouchAmount * 0.055 + wt * 0.06,
-        0.265 - this.recoilKick * 0.042 - wt * 0.24
-      );
-      this.rig.weaponPivot.rotation.set(
-        runCant - this.recoilKick * 0.1 - wt * 0.96,
-        wt * 0.22,
-        0
-      );
-
-      // Lock BOTH rigged Mixamo arms onto the AKM pistol grip & wooden handguard via 2-bone analytical IK!
-      this.applySkinnedArmIK();
+      positionRigWeaponAndSolveIK(this.rig, {
+        weaponSlot: this.rig.defaultWeaponSlot ?? 0,
+        strideBobX,
+        strideBobY,
+        runCant: wRun * 0.06,
+        recoilKick: this.recoilKick,
+        crouchAmount: this.crouchAmount,
+        wallTuck: this.wallTuck,
+      });
       return;
     }
 
@@ -1049,56 +1057,6 @@ export class TacticalAgent {
       this.rig.weaponPivot.rotation.x = -0.05 - this.recoilKick * 0.12 - this.wallTuck * 0.85;
       this.rig.weaponPivot.position.z = 0.08 - this.recoilKick * 0.045 - this.wallTuck * 0.18;
       this.rig.weaponPivot.position.y = 0.35 + breath * 1.1 + this.wallTuck * 0.05;
-    }
-  }
-
-  /**
-   * Solves analytical 2-bone IK for both arms so the rigged Mixamo soldier firmly shoulders
-   * and aims his AKM rifle in a natural CQB stance (tucked elbows, wrists aligned with grip & forend!).
-   */
-  private applySkinnedArmIK(): void {
-    const bones = this.rig.skBones;
-    if (!bones || !this.rig.rightGripTarget || !this.rig.leftGripTarget) return;
-
-    // Natural right-handed bladed CQB stance: pull right shoulder back into stock & advance left shoulder toward handguard!
-    if (bones.spine2) {
-      bones.spine2.rotation.y -= 0.16;
-    }
-    if (bones.head) {
-      bones.head.rotation.y += 0.14;
-    }
-
-    this.rig.root.updateMatrixWorld(true);
-
-    if (bones.rightArm && bones.rightForeArm && bones.rightHand) {
-      this.rig.rightGripTarget.getWorldPosition(this.ikRightTarget);
-      // Tucked CQB right elbow (down & close beside ribcage — no awkward outward chicken-wing!)
-      this.ikRightPole.set(-0.36, 0.62, -0.22).applyMatrix4(this.rig.modelPivot.matrixWorld);
-      solveTwoBoneArmIK(
-        bones.rightArm,
-        bones.rightForeArm,
-        bones.rightHand,
-        this.ikRightTarget,
-        this.ikRightPole,
-        1.0
-      );
-      // Keep wrist clean & neutral on pistol grip instead of unarmed Mixamo swinging twist
-      bones.rightHand.quaternion.set(0, 0, 0, 1);
-    }
-
-    if (bones.leftArm && bones.leftForeArm && bones.leftHand) {
-      this.rig.leftGripTarget.getWorldPosition(this.ikLeftTarget);
-      // Tucked left elbow directly beneath the wooden AKM handguard!
-      this.ikLeftPole.set(0.2, 0.56, 0.26).applyMatrix4(this.rig.modelPivot.matrixWorld);
-      solveTwoBoneArmIK(
-        bones.leftArm,
-        bones.leftForeArm,
-        bones.leftHand,
-        this.ikLeftTarget,
-        this.ikLeftPole,
-        1.0
-      );
-      bones.leftHand.quaternion.set(0, 0, 0, 1);
     }
   }
 

@@ -5,7 +5,16 @@ export type Difficulty = 'casual' | 'tactical' | 'radiant';
 export type Team = 'ally' | 'enemy';
 export type LobbyTeam = 'blue' | 'red';
 export type MapId = 'factory' | 'foundry' | 'downtown';
-export type WeaponId = 'vandal' | 'scarl';
+export type WeaponId = 'vandal' | 'scarl' | 'aug' | 'pistol9mm';
+export type CharacterId =
+  | 'shadow'
+  | 'spiderman'
+  | 'deadpool'
+  | 'gambit'
+  | 'rogue'
+  | 'luffy'
+  | 'naruto'
+  | 'bailarina';
 
 export const MAX_PLAYERS_PER_TEAM = 5;
 export const MIN_PLAYERS_PER_TEAM = 1;
@@ -15,6 +24,7 @@ export interface LobbyPlayer {
   id: string;
   name: string;
   team: LobbyTeam;
+  characterId?: CharacterId;
   isHost: boolean;
   isBot?: boolean;
   slotIndex: number; // 0..4 within team
@@ -68,7 +78,7 @@ export interface Waypoint {
 export interface WeaponDef {
   id: WeaponId;
   name: string;
-  fireMode: 'AUTO';
+  fireMode: 'AUTO' | 'SEMI';
   damageBody: number;
   damageHead: number;
   damageLeg: number;
@@ -93,6 +103,7 @@ export interface GameSettings {
   map: MapId;
   mode: GameMode;
   difficulty: Difficulty;
+  character: CharacterId;
   sensitivity: number;
   volume: number;
   crosshairColor: string;

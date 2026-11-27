@@ -1,8 +1,9 @@
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { WeaponDef, WeaponId } from '../types';
+import { createDracoGltfLoader } from '../utils/GlbLoader';
+import { CharacterId, WeaponDef, WeaponId } from '../types';
 import { SoundEngine } from '../audio/SoundEngine';
 import { TextureLibrary } from '../textures/ProceduralTextures';
+import { getCodArmyCamoTexture, solveTwoBoneArmIK } from '../entities/AgentModel';
 import {
   buildBrushedGunmetalTexture,
   buildSharpScarCerakoteTexture,
@@ -36,12 +37,12 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
   },
   scarl: {
     id: 'scarl',
-    name: 'SCAR-L',
+    name: 'SCAR-H',
     fireMode: 'AUTO',
-    damageBody: 34,
-    damageHead: 136,
-    damageLeg: 28,
-    fireRate: 10.8,
+    damageBody: 38,
+    damageHead: 152,
+    damageLeg: 30,
+    fireRate: 10.2,
     magSize: 30,
     reserveMax: 120,
     reloadTime: 1.95,
@@ -49,13 +50,59 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     moveSpread: 0.036,
     crouchMult: 0.58,
     adsMult: 0.42,
-    adsFov: 53,
-    recoilPitch: 0.0155,
-    recoilYaw: 0.0062,
+    adsFov: 52,
+    recoilPitch: 0.0165,
+    recoilYaw: 0.0064,
     equipTime: 0.3,
-    moveSpeedMult: 1.02,
+    moveSpeedMult: 1.01,
     automatic: true,
-    range: 120,
+    range: 125,
+  },
+  aug: {
+    id: 'aug',
+    name: 'AUG A4',
+    fireMode: 'AUTO',
+    damageBody: 36,
+    damageHead: 146,
+    damageLeg: 29,
+    fireRate: 10.8,
+    magSize: 30,
+    reserveMax: 120,
+    reloadTime: 2.05,
+    baseSpread: 0.0012,
+    moveSpread: 0.032,
+    crouchMult: 0.54,
+    adsMult: 0.34,
+    adsFov: 46,
+    recoilPitch: 0.0145,
+    recoilYaw: 0.0056,
+    equipTime: 0.28,
+    moveSpeedMult: 1.03,
+    automatic: true,
+    range: 130,
+  },
+  pistol9mm: {
+    id: 'pistol9mm',
+    name: '9MM PISTOL',
+    fireMode: 'SEMI',
+    damageBody: 30,
+    damageHead: 112,
+    damageLeg: 24,
+    fireRate: 8.8,
+    magSize: 15,
+    reserveMax: 75,
+    reloadTime: 1.35,
+    baseSpread: 0.0018,
+    moveSpread: 0.024,
+    crouchMult: 0.65,
+    adsMult: 0.48,
+    adsFov: 60,
+    recoilPitch: 0.014,
+    recoilYaw: 0.0045,
+    equipTime: 0.2,
+    moveSpeedMult: 1.08,
+    automatic: false,
+    range: 75,
   },
 };
 
@@ -141,12 +188,14 @@ export interface ShotResult {
 }
 
 export class WeaponSystem {
-  public slotOrder: WeaponId[] = ['vandal', 'scarl'];
+  public slotOrder: WeaponId[] = ['vandal', 'scarl', 'aug', 'pistol9mm'];
   public currentSlot = 0;
 
   public ammo: Record<WeaponId, { mag: number; reserve: number }> = {
     vandal: { mag: WEAPONS.vandal.magSize, reserve: WEAPONS.vandal.reserveMax },
     scarl: { mag: WEAPONS.scarl.magSize, reserve: WEAPONS.scarl.reserveMax },
+    aug: { mag: WEAPONS.aug.magSize, reserve: WEAPONS.aug.reserveMax },
+    pistol9mm: { mag: WEAPONS.pistol9mm.magSize, reserve: WEAPONS.pistol9mm.reserveMax },
   };
 
   public isReloading = false;
@@ -175,16 +224,26 @@ export class WeaponSystem {
   private bobPhase = 0;
   private breathPhase = 0;
 
-  // Cryzen.io-inspired bottom-right hipfire & dead-center ADS framing for both AKM 7.62 and SCAR-L
-  private readonly vandalHipPos = new THREE.Vector3(0.215, -0.178, -0.4);
-  private readonly vandalHipRot = new THREE.Euler(0.012, 0.055, -0.012);
-  private readonly vandalAdsPos = new THREE.Vector3(0.0, -0.116, -0.35);
+  // Crisp full-size bottom-right hipfire & dead-center iron-sight ADS framing (zero near-plane clipping!)
+  private readonly vandalHipPos = new THREE.Vector3(0.215, -0.168, -0.44);
+  private readonly vandalHipRot = new THREE.Euler(0.012, 0.052, -0.012);
+  private readonly vandalAdsPos = new THREE.Vector3(0.0, -0.062, -0.42);
   private readonly vandalAdsRot = new THREE.Euler(0.0, 0.0, 0.0);
 
-  private readonly scarHipPos = new THREE.Vector3(0.22, -0.172, -0.41);
-  private readonly scarHipRot = new THREE.Euler(0.012, 0.06, -0.012);
-  private readonly scarAdsPos = new THREE.Vector3(0.0, -0.118, -0.27);
+  private readonly scarHipPos = new THREE.Vector3(0.215, -0.166, -0.44);
+  private readonly scarHipRot = new THREE.Euler(0.012, 0.055, -0.012);
+  private readonly scarAdsPos = new THREE.Vector3(0.0, -0.098, -0.44);
   private readonly scarAdsRot = new THREE.Euler(0.0, 0.0, 0.0);
+
+  private readonly augHipPos = new THREE.Vector3(0.215, -0.168, -0.43);
+  private readonly augHipRot = new THREE.Euler(0.012, 0.052, -0.012);
+  private readonly augAdsPos = new THREE.Vector3(0.0, -0.092, -0.42);
+  private readonly augAdsRot = new THREE.Euler(0.0, 0.0, 0.0);
+
+  private readonly pistolHipPos = new THREE.Vector3(0.152, -0.092, -0.49);
+  private readonly pistolHipRot = new THREE.Euler(0.008, 0.042, -0.008);
+  private readonly pistolAdsPos = new THREE.Vector3(0.0, -0.022, -0.50);
+  private readonly pistolAdsRot = new THREE.Euler(0.0, 0.0, 0.0);
 
   public viewmodelRoot = new THREE.Group();
   private models: Record<'vandal', THREE.Group>;
@@ -193,8 +252,27 @@ export class WeaponSystem {
   private scarBoltCarrier: THREE.Object3D | null = null;
   private scarMagGroup: THREE.Object3D | null = null;
   private scarMagRestPos = new THREE.Vector3();
-  private akmMuzzlePos = new THREE.Vector3(0, 0.015, -0.58);
-  private scarMuzzlePos = new THREE.Vector3(0, 0.024, -0.6);
+
+  // Real downloaded 3D GLB viewmodel groups (mounted cleanly inside the rigged FPS hands!)
+  private weaponGlbGroups: Record<WeaponId, THREE.Group> = {
+    vandal: new THREE.Group(),
+    scarl: new THREE.Group(),
+    aug: new THREE.Group(),
+    pistol9mm: new THREE.Group(),
+  };
+  private weaponGlbLoaded: Record<WeaponId, boolean> = {
+    vandal: false,
+    scarl: false,
+    aug: false,
+    pistol9mm: false,
+  };
+  private weaponBoltPart: Partial<Record<WeaponId, { obj: THREE.Object3D; restZ: number }>> = {};
+  private weaponMagPart: Partial<Record<WeaponId, { obj: THREE.Object3D; restY: number }>> = {};
+
+  private akmMuzzlePos = new THREE.Vector3(0, -0.032, -0.66);
+  private scarMuzzlePos = new THREE.Vector3(0, -0.012, -0.70);
+  private augMuzzlePos = new THREE.Vector3(0, -0.017, -0.40);
+  private pistolMuzzlePos = new THREE.Vector3(0.0, -0.023, -0.045);
   private muzzlePoint = new THREE.Object3D();
   private muzzleFlashGroup = new THREE.Group();
   private muzzleLight = new THREE.PointLight(0xffaa44, 0, 12, 1.5);
@@ -264,6 +342,388 @@ export class WeaponSystem {
     reload: null,
   };
   private armsLoaded = false;
+  private armsShirtMats: THREE.MeshStandardMaterial[] = [];
+  private armsGloveMats: THREE.MeshStandardMaterial[] = [];
+  private armsSkinMats: THREE.MeshStandardMaterial[] = [];
+  private activeCharacterTheme: CharacterId = 'shadow';
+  private activeCharacterTeam: 'ally' | 'enemy' = 'ally';
+  private characterArmsTexCache = new Map<
+    string,
+    { shirtMap: THREE.CanvasTexture; gloveMap: THREE.CanvasTexture; skinMap: THREE.CanvasTexture }
+  >();
+
+  // Left-arm bone references for live two-handed tactical Weaver pistol grip (prevents floating left hand on 9mm!)
+  private fpsUpperArmL: THREE.Object3D | null = null;
+  private fpsLowerArmL: THREE.Object3D | null = null;
+  private fpsHandL: THREE.Object3D | null = null;
+  private fpsUpperArmLRestQ = new THREE.Quaternion();
+  private fpsLowerArmLRestQ = new THREE.Quaternion();
+  private fpsHandLRestQ = new THREE.Quaternion();
+  private pistolSupportBlend = 0;
+  private readonly fpsIkTargetW = new THREE.Vector3();
+  private readonly fpsIkPoleW = new THREE.Vector3();
+  private readonly fpsHandLPistolQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.18, 0.72, -0.58));
+
+  private buildCharacterArmsTextures(
+    characterId: CharacterId,
+    team: 'ally' | 'enemy'
+  ): {
+    shirtMap: THREE.CanvasTexture;
+    gloveMap: THREE.CanvasTexture;
+    skinMap: THREE.CanvasTexture;
+  } {
+    const cacheKey = characterId === 'shadow' ? `shadow:${team}` : characterId;
+    const cached = this.characterArmsTexCache.get(cacheKey);
+    if (cached) return cached;
+
+    const mkCanvas = (draw: (ctx: CanvasRenderingContext2D, sz: number) => void): THREE.CanvasTexture => {
+      const sz = 256;
+      const c = document.createElement('canvas');
+      c.width = sz;
+      c.height = sz;
+      const ctx = c.getContext('2d')!;
+      draw(ctx, sz);
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+      tex.needsUpdate = true;
+      return tex;
+    };
+
+    const drawMicroWeave = (ctx: CanvasRenderingContext2D, sz: number, alpha = 0.08, step = 6) => {
+      ctx.strokeStyle = `rgba(0,0,0,${alpha})`;
+      ctx.lineWidth = 1;
+      for (let i = -sz; i < sz * 2; i += step) {
+        ctx.beginPath();
+        ctx.moveTo(i, 0);
+        ctx.lineTo(i + sz, sz);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(i + sz, 0);
+        ctx.lineTo(i, sz);
+        ctx.stroke();
+      }
+    };
+
+    const drawSpiderWebSuit = (ctx: CanvasRenderingContext2D, sz: number, withBlueSidePanel: boolean) => {
+      // Rich crimson Spider-Man spandex base with subtle fabric depth
+      const g = ctx.createLinearGradient(0, 0, sz, sz);
+      g.addColorStop(0, '#e3182b');
+      g.addColorStop(0.5, '#cc1022');
+      g.addColorStop(1, '#b50c1d');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, sz, sz);
+
+      // Subtle spandex micro-hex weave
+      drawMicroWeave(ctx, sz, 0.07, 5);
+
+      // Optional iconic royal-blue spandex under-forearm panel on sleeve
+      if (withBlueSidePanel) {
+        ctx.fillStyle = '#123e9e';
+        ctx.fillRect(0, sz * 0.64, sz, sz * 0.36);
+        drawMicroWeave(ctx, sz, 0.09, 5);
+        // Crisp black piping separating red and blue panels
+        ctx.fillStyle = '#14151a';
+        ctx.fillRect(0, sz * 0.625, sz, 5);
+      }
+
+      // Crisp raised black spider-web grid lines across the red spandex!
+      ctx.strokeStyle = '#15151a';
+      ctx.lineWidth = 2.4;
+      const webLimitY = withBlueSidePanel ? sz * 0.63 : sz;
+      const cols = 8;
+      const rows = 6;
+      const dx = sz / cols;
+      const dy = sz / rows;
+      // Longitudinal web strands
+      for (let x = 0; x <= sz; x += dx) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, webLimitY);
+        ctx.stroke();
+      }
+      // Curved scalloped cross-web arcs between longitudinal strands
+      for (let r = 0; r <= rows; r++) {
+        const y = r * dy;
+        if (y > webLimitY + 6) continue;
+        for (let c = 0; c < cols; c++) {
+          const x0 = c * dx;
+          const x1 = x0 + dx;
+          ctx.beginPath();
+          ctx.moveTo(x0, y);
+          ctx.quadraticCurveTo((x0 + x1) * 0.5, y + dy * 0.28, x1, y);
+          ctx.stroke();
+        }
+      }
+      // Subtle specular edge highlight beside each black web line for raised 3D spandex look
+      ctx.strokeStyle = 'rgba(255,140,150,0.22)';
+      ctx.lineWidth = 1;
+      for (let x = 2; x <= sz; x += dx) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, webLimitY);
+        ctx.stroke();
+      }
+    };
+
+    let result: { shirtMap: THREE.CanvasTexture; gloveMap: THREE.CanvasTexture; skinMap: THREE.CanvasTexture };
+
+    if (characterId === 'spiderman') {
+      // Spider-Man: FULL crimson webbed spandex suit across forearm, glove AND fingers (zero bare skin!)
+      result = {
+        shirtMap: mkCanvas((ctx, sz) => drawSpiderWebSuit(ctx, sz, true)),
+        gloveMap: mkCanvas((ctx, sz) => drawSpiderWebSuit(ctx, sz, false)),
+        skinMap: mkCanvas((ctx, sz) => drawSpiderWebSuit(ctx, sz, false)),
+      };
+    } else if (characterId === 'deadpool') {
+      // Deadpool: Crimson kevlar honeycomb sleeve + matte charcoal-black armored gloves & fingers!
+      result = {
+        shirtMap: mkCanvas((ctx, sz) => {
+          ctx.fillStyle = '#b41220';
+          ctx.fillRect(0, 0, sz, sz);
+          ctx.fillStyle = '#1b1d24';
+          ctx.fillRect(0, sz * 0.58, sz, sz * 0.42);
+          drawMicroWeave(ctx, sz, 0.14, 7);
+          ctx.fillStyle = '#242730';
+          ctx.fillRect(0, sz * 0.55, sz, 8);
+        }),
+        gloveMap: mkCanvas((ctx, sz) => {
+          ctx.fillStyle = '#1d2028';
+          ctx.fillRect(0, 0, sz, sz);
+          drawMicroWeave(ctx, sz, 0.16, 6);
+          // Subtle crimson tactical knuckle accent
+          ctx.fillStyle = '#b81424';
+          ctx.fillRect(0, sz * 0.12, sz, 14);
+        }),
+        skinMap: mkCanvas((ctx, sz) => {
+          ctx.fillStyle = '#1a1d24';
+          ctx.fillRect(0, 0, sz, sz);
+          drawMicroWeave(ctx, sz, 0.12, 6);
+        }),
+      };
+    } else if (characterId === 'gambit') {
+      // Gambit: Brown leather trenchcoat sleeve + dark-indigo/magenta cyber-gauntlet + bare fingertips!
+      result = {
+        shirtMap: mkCanvas((ctx, sz) => {
+          ctx.fillStyle = '#5a3520';
+          ctx.fillRect(0, 0, sz, sz);
+          drawMicroWeave(ctx, sz, 0.11, 8);
+          ctx.fillStyle = '#3a2012';
+          ctx.fillRect(0, sz * 0.84, sz, sz * 0.16);
+        }),
+        gloveMap: mkCanvas((ctx, sz) => {
+          ctx.fillStyle = '#25263a';
+          ctx.fillRect(0, 0, sz, sz);
+          drawMicroWeave(ctx, sz, 0.14, 6);
+          ctx.fillStyle = '#d42894';
+          ctx.fillRect(0, sz * 0.22, sz, 12);
+          ctx.fillRect(0, sz * 0.72, sz, 8);
+        }),
+        skinMap: mkCanvas((ctx, sz) => {
+          ctx.fillStyle = '#e0ac8c';
+          ctx.fillRect(0, 0, sz, sz);
+        }),
+      };
+    } else if (characterId === 'rogue') {
+      // Rogue: Warm brown bomber jacket with green X-Men inner cuff + FULL golden-yellow spandex gloves!
+      result = {
+        shirtMap: mkCanvas((ctx, sz) => {
+          ctx.fillStyle = '#7c4c28';
+          ctx.fillRect(0, 0, sz, sz);
+          drawMicroWeave(ctx, sz, 0.1, 8);
+          ctx.fillStyle = '#1b8a44';
+          ctx.fillRect(0, sz * 0.72, sz, sz * 0.28);
+        }),
+        gloveMap: mkCanvas((ctx, sz) => {
+          ctx.fillStyle = '#f2c422';
+          ctx.fillRect(0, 0, sz, sz);
+          drawMicroWeave(ctx, sz, 0.06, 6);
+          ctx.fillStyle = '#c89b10';
+          ctx.fillRect(0, sz * 0.88, sz, 8);
+        }),
+        skinMap: mkCanvas((ctx, sz) => {
+          ctx.fillStyle = '#efc020';
+          ctx.fillRect(0, 0, sz, sz);
+          drawMicroWeave(ctx, sz, 0.05, 6);
+        }),
+      };
+    } else if (characterId === 'luffy') {
+      // Luffy: Bright pirate-captain crimson sleeve + gold cuff trim + bare tanned anime forearms & hands!
+      result = {
+        shirtMap: mkCanvas((ctx, sz) => {
+          ctx.fillStyle = '#d82026';
+          ctx.fillRect(0, 0, sz, sz);
+          drawMicroWeave(ctx, sz, 0.07, 7);
+          ctx.fillStyle = '#f2c432';
+          ctx.fillRect(0, sz * 0.82, sz, sz * 0.18);
+        }),
+        gloveMap: mkCanvas((ctx, sz) => {
+          ctx.fillStyle = '#e8b38c';
+          ctx.fillRect(0, 0, sz, sz);
+        }),
+        skinMap: mkCanvas((ctx, sz) => {
+          ctx.fillStyle = '#e8b38c';
+          ctx.fillRect(0, 0, sz, sz);
+        }),
+      };
+    } else if (characterId === 'naruto') {
+      // Naruto: Bright Shippuden orange + matte-black tracksuit sleeve + dark navy shinobi fingerless gloves + bare fingers!
+      result = {
+        shirtMap: mkCanvas((ctx, sz) => {
+          ctx.fillStyle = '#f67016';
+          ctx.fillRect(0, 0, sz, sz);
+          ctx.fillStyle = '#1e2028';
+          ctx.fillRect(0, 0, sz, sz * 0.34);
+          drawMicroWeave(ctx, sz, 0.08, 7);
+        }),
+        gloveMap: mkCanvas((ctx, sz) => {
+          ctx.fillStyle = '#22293c';
+          ctx.fillRect(0, 0, sz, sz);
+          drawMicroWeave(ctx, sz, 0.12, 6);
+          ctx.fillStyle = '#7e889c';
+          ctx.fillRect(sz * 0.2, sz * 0.3, sz * 0.6, 16);
+        }),
+        skinMap: mkCanvas((ctx, sz) => {
+          ctx.fillStyle = '#ebc09c';
+          ctx.fillRect(0, 0, sz, sz);
+        }),
+      };
+    } else if (characterId === 'bailarina') {
+      // Bailarina: Rich crimson-rose velvet sleeve with gold trim + sleek black satin fingerless gloves + fair skin fingers!
+      result = {
+        shirtMap: mkCanvas((ctx, sz) => {
+          ctx.fillStyle = '#b41e52';
+          ctx.fillRect(0, 0, sz, sz);
+          drawMicroWeave(ctx, sz, 0.08, 6);
+          ctx.fillStyle = '#e0b862';
+          ctx.fillRect(0, sz * 0.84, sz, 10);
+        }),
+        gloveMap: mkCanvas((ctx, sz) => {
+          ctx.fillStyle = '#1e1824';
+          ctx.fillRect(0, 0, sz, sz);
+          drawMicroWeave(ctx, sz, 0.08, 5);
+        }),
+        skinMap: mkCanvas((ctx, sz) => {
+          ctx.fillStyle = '#edd2c0';
+          ctx.fillRect(0, 0, sz, sz);
+        }),
+      };
+    } else {
+      // CoD Modern Warfare Operator: Blue Snow Army Camo (Blue Team / Solo) or Light Red Army Camo (Red Team)
+      // + authentic CoD charcoal-slate / coyote Mechanix tactical combat gloves!
+      const isBlue = team === 'ally';
+      result = {
+        shirtMap: getCodArmyCamoTexture(team),
+        gloveMap: mkCanvas((ctx, sz) => {
+          ctx.fillStyle = isBlue ? '#2f3a48' : '#56483a';
+          ctx.fillRect(0, 0, sz, sz);
+          drawMicroWeave(ctx, sz, 0.16, 5);
+          ctx.fillStyle = isBlue ? '#1c2430' : '#3a3026';
+          ctx.fillRect(0, sz * 0.72, sz, sz * 0.28);
+        }),
+        skinMap: mkCanvas((ctx, sz) => {
+          ctx.fillStyle = isBlue ? '#28323e' : '#4a3e32';
+          ctx.fillRect(0, 0, sz, sz);
+          drawMicroWeave(ctx, sz, 0.14, 5);
+        }),
+      };
+    }
+
+    this.characterArmsTexCache.set(cacheKey, result);
+    return result;
+  }
+
+  public setCharacterTheme(characterId: CharacterId, team: 'ally' | 'enemy' = this.activeCharacterTeam): void {
+    this.activeCharacterTheme = characterId;
+    this.activeCharacterTeam = team;
+    const texSet = this.buildCharacterArmsTextures(characterId, team);
+
+    const spec: Record<
+      CharacterId,
+      {
+        shirtEm: number;
+        shirtEmI: number;
+        shirtRough: number;
+        gloveEm: number;
+        gloveEmI: number;
+        gloveRough: number;
+        skinEm: number;
+        skinEmI: number;
+        skinRough: number;
+      }
+    > = {
+      shadow: {
+        shirtEm: 0x0a0e16, shirtEmI: 0.16, shirtRough: 0.74,
+        gloveEm: 0x090c12, gloveEmI: 0.14, gloveRough: 0.64,
+        skinEm: 0x090c12, skinEmI: 0.14, skinRough: 0.66,
+      },
+      spiderman: {
+        shirtEm: 0x4a060e, shirtEmI: 0.24, shirtRough: 0.44,
+        gloveEm: 0x4e060e, gloveEmI: 0.25, gloveRough: 0.42,
+        skinEm: 0x4e060e, skinEmI: 0.25, skinRough: 0.42,
+      },
+      deadpool: {
+        shirtEm: 0x3b050b, shirtEmI: 0.2, shirtRough: 0.56,
+        gloveEm: 0x0e0a0c, gloveEmI: 0.16, gloveRough: 0.54,
+        skinEm: 0x0c0c10, skinEmI: 0.15, skinRough: 0.56,
+      },
+      gambit: {
+        shirtEm: 0x1e1008, shirtEmI: 0.16, shirtRough: 0.68,
+        gloveEm: 0x380b2a, gloveEmI: 0.24, gloveRough: 0.46,
+        skinEm: 0x341c12, skinEmI: 0.13, skinRough: 0.72,
+      },
+      rogue: {
+        shirtEm: 0x22140a, shirtEmI: 0.16, shirtRough: 0.66,
+        gloveEm: 0x4a3806, gloveEmI: 0.22, gloveRough: 0.48,
+        skinEm: 0x4a3806, skinEmI: 0.22, skinRough: 0.48,
+      },
+      luffy: {
+        shirtEm: 0x420a0e, shirtEmI: 0.2, shirtRough: 0.66,
+        gloveEm: 0x361e12, gloveEmI: 0.14, gloveRough: 0.72,
+        skinEm: 0x361e12, skinEmI: 0.14, skinRough: 0.72,
+      },
+      naruto: {
+        shirtEm: 0x4e2006, shirtEmI: 0.22, shirtRough: 0.62,
+        gloveEm: 0x0c1020, gloveEmI: 0.16, gloveRough: 0.58,
+        skinEm: 0x362014, skinEmI: 0.14, skinRough: 0.72,
+      },
+      bailarina: {
+        shirtEm: 0x3c081c, shirtEmI: 0.22, shirtRough: 0.48,
+        gloveEm: 0x120c18, gloveEmI: 0.18, gloveRough: 0.36,
+        skinEm: 0x38241c, skinEmI: 0.14, skinRough: 0.7,
+      },
+    };
+
+    const s = spec[characterId] ?? spec.shadow;
+    for (const m of this.armsShirtMats) {
+      m.color.setHex(0xffffff);
+      m.map = texSet.shirtMap;
+      m.emissive.setHex(s.shirtEm);
+      m.emissiveIntensity = s.shirtEmI;
+      m.roughness = s.shirtRough;
+      m.metalness = characterId === 'spiderman' ? 0.08 : 0.04;
+      m.needsUpdate = true;
+    }
+    for (const m of this.armsGloveMats) {
+      m.color.setHex(0xffffff);
+      m.map = texSet.gloveMap;
+      m.emissive.setHex(s.gloveEm);
+      m.emissiveIntensity = s.gloveEmI;
+      m.roughness = s.gloveRough;
+      m.metalness = characterId === 'gambit' ? 0.28 : characterId === 'spiderman' ? 0.08 : 0.12;
+      m.needsUpdate = true;
+    }
+    for (const m of this.armsSkinMats) {
+      m.color.setHex(0xffffff);
+      m.map = texSet.skinMap;
+      m.emissive.setHex(s.skinEm);
+      m.emissiveIntensity = s.skinEmI;
+      m.roughness = s.skinRough;
+      m.metalness = characterId === 'spiderman' ? 0.08 : 0.02;
+      m.needsUpdate = true;
+    }
+  }
 
   constructor(
     private scene: THREE.Scene,
@@ -335,10 +795,17 @@ export class WeaponSystem {
     this.scarLGroup.visible = false;
     rifleContainer.add(this.scarLGroup);
 
+    for (const wid of this.slotOrder) {
+      const grp = this.weaponGlbGroups[wid];
+      grp.visible = false;
+      rifleContainer.add(grp);
+    }
+
     this.viewmodelRoot.add(this.models.vandal);
     this.buildMuzzleFlash();
     this.selectSlot(0, true);
     this.loadFpsArmsModel();
+    this.loadDownloadedWeaponGlbs();
   }
 
   public get currentWeapon(): WeaponDef {
@@ -356,6 +823,8 @@ export class WeaponSystem {
   public resetAll(): void {
     this.ammo.vandal = { mag: WEAPONS.vandal.magSize, reserve: WEAPONS.vandal.reserveMax };
     this.ammo.scarl = { mag: WEAPONS.scarl.magSize, reserve: WEAPONS.scarl.reserveMax };
+    this.ammo.aug = { mag: WEAPONS.aug.magSize, reserve: WEAPONS.aug.reserveMax };
+    this.ammo.pistol9mm = { mag: WEAPONS.pistol9mm.magSize, reserve: WEAPONS.pistol9mm.reserveMax };
     this.isReloading = false;
     this.reloadProgress = 0;
     this.isAds = false;
@@ -398,6 +867,45 @@ export class WeaponSystem {
     this.droppedWeapons = [];
   }
 
+  private syncActiveWeaponVisuals(): void {
+    const id = this.currentWeapon.id;
+    const anyGlbReady = this.weaponGlbLoaded[id];
+
+    // Hide old built-in AKM mesh from fps_arms.glb as soon as our real downloaded weapons are ready!
+    for (const m of this.akmMeshes) {
+      m.visible = id === 'vandal' && !this.weaponGlbLoaded.vandal;
+    }
+    this.scarLGroup.visible = id === 'scarl' && !this.weaponGlbLoaded.scarl;
+
+    for (const wid of this.slotOrder) {
+      this.weaponGlbGroups[wid].visible = wid === id && this.weaponGlbLoaded[wid];
+    }
+
+    const muzzlePos =
+      id === 'scarl'
+        ? this.scarMuzzlePos
+        : id === 'aug'
+        ? this.augMuzzlePos
+        : id === 'pistol9mm'
+        ? this.pistolMuzzlePos
+        : this.akmMuzzlePos;
+
+    this.models.vandal.add(this.muzzlePoint, this.muzzleFlashGroup, this.muzzleLight);
+    this.muzzlePoint.position.copy(muzzlePos);
+    this.muzzleFlashGroup.position.copy(this.muzzlePoint.position);
+    this.muzzleLight.position.copy(this.muzzlePoint.position);
+
+    if (this.armsLoaded) {
+      this.models.vandal.add(this.fpsArmsPivot);
+      this.fpsArmsPivot.visible = true;
+      // Keep authentic 1:1 human arm scale across all 4 weapons (live 2-bone IK adjusts left hand cleanly for 9mm pistol!)
+      this.fpsArmsPivot.scale.setScalar(this.fpsArmsPivot.userData.baseScale ?? 0.0756);
+      if (anyGlbReady && this.armsActions.idle) {
+        // Keep existing arms idle/shoot/reload animations running smoothly!
+      }
+    }
+  }
+
   public selectSlot(index: number, instant = false): void {
     if (index < 0 || index >= this.slotOrder.length) return;
     if (index === this.currentSlot && !instant) return;
@@ -411,31 +919,126 @@ export class WeaponSystem {
     this.models.vandal.visible = true;
     this.adsProgress = 0;
 
-    const isScar = this.currentWeapon.id === 'scarl';
-    for (const m of this.akmMeshes) {
-      m.visible = !isScar;
-    }
-    this.scarLGroup.visible = isScar;
-
-    // Parent muzzle FX directly onto active rifle barrel so tracers & flash stay locked in hipfire AND ADS!
-    this.models.vandal.add(this.muzzlePoint, this.muzzleFlashGroup, this.muzzleLight);
-    this.muzzlePoint.position.copy(isScar ? this.scarMuzzlePos : this.akmMuzzlePos);
-    this.muzzleFlashGroup.position.copy(this.muzzlePoint.position);
-    this.muzzleLight.position.copy(this.muzzlePoint.position);
-
+    this.syncActiveWeaponVisuals();
     if (this.armsLoaded) {
-      this.models.vandal.add(this.fpsArmsPivot);
-      this.fpsArmsPivot.visible = true;
       this.playArmsAnim('idle');
     }
   }
 
   /**
-   * Loads the real Blender-rigged AKM rifle + FPS arms from /models/fps_arms.glb
-   * keeping BOTH ArmModel AND AKM_model visible with Cryzen.io styling and skeletal Idle/Shoot/Reload clips!
+   * Loads ALL 4 real downloaded 3D weapons (/models/guns/akm.glb, scarh.glb, aug.glb, pistol9mm.glb)
+   * with Draco decompression and mounts them cleanly inside the rigged FPS hands!
+   */
+  private loadDownloadedWeaponGlbs(): void {
+    const loader = createDracoGltfLoader();
+    const specs: Array<{
+      id: WeaponId;
+      url: string;
+      pos: [number, number, number];
+      scale: number;
+      muzzle: [number, number, number];
+      boltPattern?: RegExp;
+      magPattern?: RegExp;
+    }> = [
+      {
+        // Full-size AKM 7.62 calibrated dead-on Hand.R grip (+0.20..+0.33), Mag (+0.022), & Hand.L handguard (-0.10..-0.31)
+        id: 'vandal',
+        url: '/models/guns/akm.glb',
+        pos: [0.011, -0.082, 0.025],
+        scale: 1.56,
+        muzzle: [0.0, -0.032, -0.66],
+        boltPattern: /^bolt$/i,
+        magPattern: /^mag$/i,
+      },
+      {
+        // Full-size SCAR-H calibrated dead-on Hand.R grip (+0.18..+0.31), Mag (+0.032), & Hand.L rail (-0.04..-0.35)
+        id: 'scarl',
+        url: '/models/guns/scarh.glb',
+        pos: [-0.011, -0.018, -0.02],
+        scale: 1.54,
+        muzzle: [0.0, -0.012, -0.70],
+      },
+      {
+        // Full-size AUG A4 centered on bore X=0, trigger dead-on Trigger bone (+0.162), handguard squarely in Hand.L (-0.07..-0.30)
+        id: 'aug',
+        url: '/models/guns/aug.glb',
+        pos: [-0.028, -0.042, 0.195],
+        scale: 1.48,
+        muzzle: [0.0, -0.017, -0.40],
+        boltPattern: /bolt/i,
+        magPattern: /30rnd.*mag/i,
+      },
+      {
+        // Authentic hand-sized dead-level 9MM Pistol: trigger dead-on Index.R (+0.185), grip wrapped inside Hand.R (+0.24..+0.32) + tucked Weaver left-hand IK!
+        id: 'pistol9mm',
+        url: '/models/guns/pistol9mm.glb',
+        pos: [0.0, -0.056, 0.152],
+        scale: 1.85,
+        muzzle: [0.0, -0.023, -0.045],
+        boltPattern: /slide_low/i,
+      },
+    ];
+
+    for (const sp of specs) {
+      loader.load(
+        sp.url,
+        (gltf) => {
+          const root = gltf.scene;
+          root.scale.setScalar(sp.scale);
+          root.position.set(sp.pos[0], sp.pos[1], sp.pos[2]);
+
+          root.traverse((obj) => {
+            const mesh = obj as THREE.Mesh;
+            if (!mesh.isMesh) return;
+            mesh.frustumCulled = false;
+            mesh.castShadow = false;
+            mesh.receiveShadow = false;
+            const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+            for (const m of mats) {
+              const std = m as THREE.MeshStandardMaterial;
+              if (std && std.isMeshStandardMaterial) {
+                std.envMapIntensity = 1.25;
+                if (!std.emissiveMap) {
+                  std.emissive.setHex(0x101318);
+                  std.emissiveIntensity = 0.14;
+                }
+                std.needsUpdate = true;
+              }
+            }
+            if (sp.boltPattern && sp.boltPattern.test(mesh.name) && !this.weaponBoltPart[sp.id]) {
+              this.weaponBoltPart[sp.id] = { obj: mesh, restZ: mesh.position.z };
+            }
+            if (sp.magPattern && sp.magPattern.test(mesh.name) && !this.weaponMagPart[sp.id]) {
+              this.weaponMagPart[sp.id] = { obj: mesh, restY: mesh.position.y };
+            }
+          });
+
+          const container = this.weaponGlbGroups[sp.id];
+          container.clear();
+          container.add(root);
+          this.weaponGlbLoaded[sp.id] = true;
+
+          if (sp.id === 'vandal') this.akmMuzzlePos.set(...sp.muzzle);
+          else if (sp.id === 'scarl') this.scarMuzzlePos.set(...sp.muzzle);
+          else if (sp.id === 'aug') this.augMuzzlePos.set(...sp.muzzle);
+          else if (sp.id === 'pistol9mm') this.pistolMuzzlePos.set(...sp.muzzle);
+
+          this.syncActiveWeaponVisuals();
+        },
+        undefined,
+        (err) => {
+          console.warn(`[WeaponSystem] Failed loading ${sp.url}:`, err);
+        }
+      );
+    }
+  }
+
+  /**
+   * Loads the rigged FPS arms + skeletal Idle/Shoot/Reload clips from /models/fps_arms.glb
+   * keeping all existing hand/reload/recoil animations intact while swapping in the downloaded 3D guns!
    */
   private loadFpsArmsModel(): void {
-    const loader = new GLTFLoader();
+    const loader = createDracoGltfLoader();
     loader.load(
       '/models/fps_arms.glb',
       (gltf) => {
@@ -478,18 +1081,21 @@ export class WeaponSystem {
               std.metalness = 0.04;
               std.emissive.setHex(0x0a1f4a);
               std.emissiveIntensity = 0.2;
+              this.armsShirtMats.push(std);
             } else if (mName.includes('glove')) {
               std.color.setHex(0x2d343b);
               std.roughness = 0.68;
               std.metalness = 0.14;
               std.emissive.setHex(0x0c0f14);
               std.emissiveIntensity = 0.15;
+              this.armsGloveMats.push(std);
             } else if (mName.includes('skin')) {
               std.color.setHex(0xe2ad90);
               std.roughness = 0.76;
               std.metalness = 0.0;
               std.emissive.setHex(0x361e14);
               std.emissiveIntensity = 0.13;
+              this.armsSkinMats.push(std);
             } else if (mName.includes('wood')) {
               std.color.setHex(0xffffff);
               std.map = akWoodTex;
@@ -586,6 +1192,12 @@ export class WeaponSystem {
         const magBone = findNode(/^magazine$/i);
         const boltBone = findNode(/^bolt$/i);
         const handLBone = findNode(/^handl$/i);
+        this.fpsUpperArmL = findNode(/^upperarml$/i);
+        this.fpsLowerArmL = findNode(/^lowerarml$/i);
+        this.fpsHandL = handLBone;
+        if (this.fpsUpperArmL) this.fpsUpperArmLRestQ.copy(this.fpsUpperArmL.quaternion);
+        if (this.fpsLowerArmL) this.fpsLowerArmLRestQ.copy(this.fpsLowerArmL.quaternion);
+        if (this.fpsHandL) this.fpsHandLRestQ.copy(this.fpsHandL.quaternion);
 
         if (triggerBone && magBone) {
           const trigW = new THREE.Vector3();
@@ -623,31 +1235,26 @@ export class WeaponSystem {
           const offset = new THREE.Vector3(0.0, -0.015, -0.03).sub(scaledAnchor);
 
           this.fpsArmsPivot.scale.setScalar(akmScale);
+          this.fpsArmsPivot.userData.baseScale = akmScale;
           this.fpsArmsPivot.position.copy(offset);
 
-          // Calibrate exact muzzle tip from scaled Trigger -> Magazine vector (~0.56m ahead of Bolt!)
-          const scaledTrig = trigW.clone().multiplyScalar(akmScale).add(offset);
-          const muzzleZ = scaledTrig.z - 0.64;
-          const muzzleY = scaledTrig.y + 0.068;
-          this.akmMuzzlePos.set(0, muzzleY, muzzleZ);
-          const isScar = this.currentWeapon.id === 'scarl';
-          this.muzzlePoint.position.copy(isScar ? this.scarMuzzlePos : this.akmMuzzlePos);
-          this.muzzleFlashGroup.position.copy(this.muzzlePoint.position);
-          this.muzzleLight.position.copy(this.muzzlePoint.position);
+          if (!this.weaponGlbLoaded.vandal) {
+            const scaledTrig = trigW.clone().multiplyScalar(akmScale).add(offset);
+            const muzzleZ = scaledTrig.z - 0.64;
+            const muzzleY = scaledTrig.y + 0.068;
+            this.akmMuzzlePos.set(0, muzzleY, muzzleZ);
+          }
         } else {
           this.fpsArmsPivot.scale.setScalar(0.082);
+          this.fpsArmsPivot.userData.baseScale = 0.082;
           this.fpsArmsPivot.position.set(0, -0.14, -0.06);
         }
-
-        const isScarNow = this.currentWeapon.id === 'scarl';
-        for (const m of this.akmMeshes) {
-          m.visible = !isScarNow;
-        }
-        this.scarLGroup.visible = isScarNow;
 
         this.armsLoaded = true;
         this.models.vandal.add(this.fpsArmsPivot);
         this.fpsArmsPivot.visible = true;
+        this.setCharacterTheme(this.activeCharacterTheme);
+        this.syncActiveWeaponVisuals();
         this.playArmsAnim('idle');
       },
       undefined,
@@ -775,14 +1382,18 @@ export class WeaponSystem {
 
     this.consecutiveShots += 1;
     this.sprayResetTimer = 0.34;
-    this.kickZVel += w.id === 'scarl' ? 0.56 : 0.72;
-    this.kickRotVel += w.id === 'scarl' ? 0.78 : 1.05;
+    this.kickZVel += w.id === 'pistol9mm' ? 0.42 : w.id === 'aug' ? 0.50 : w.id === 'scarl' ? 0.58 : 0.72;
+    this.kickRotVel += w.id === 'pistol9mm' ? 0.65 : w.id === 'aug' ? 0.72 : w.id === 'scarl' ? 0.80 : 1.05;
 
     this.triggerMuzzleFlash();
     this.spawnBrassShell(muzzleWorld, right, up, forward);
     this.playArmsAnim('shoot');
     if (w.id === 'scarl') {
       this.sound.playScarShot(1.0);
+    } else if (w.id === 'aug') {
+      this.sound.playAugShot(1.0);
+    } else if (w.id === 'pistol9mm') {
+      this.sound.playGhostShot(1.0);
     } else {
       this.sound.playVandalShot(1.0);
     }
@@ -1274,6 +1885,10 @@ export class WeaponSystem {
     }
 
     if (this.armsMixer) {
+      // Restore bind-pose left-arm rotations before AnimationMixer runs so rifle Idle never drifts after 9mm pistol IK!
+      if (this.fpsUpperArmL) this.fpsUpperArmL.quaternion.copy(this.fpsUpperArmLRestQ);
+      if (this.fpsLowerArmL) this.fpsLowerArmL.quaternion.copy(this.fpsLowerArmLRestQ);
+      if (this.fpsHandL) this.fpsHandL.quaternion.copy(this.fpsHandLRestQ);
       this.armsMixer.update(dt);
     }
 
@@ -1323,11 +1938,38 @@ export class WeaponSystem {
     // Cubic smoothstep easing for ultra-silky ADS zoom-in/out!
     const adsEase = this.adsProgress * this.adsProgress * (3 - 2 * this.adsProgress);
 
-    const isScar = w.id === 'scarl';
-    const hipPos = isScar ? this.scarHipPos : this.vandalHipPos;
-    const hipRot = isScar ? this.scarHipRot : this.vandalHipRot;
-    const adsPos = isScar ? this.scarAdsPos : this.vandalAdsPos;
-    const adsRot = isScar ? this.scarAdsRot : this.vandalAdsRot;
+    const hipPos =
+      w.id === 'scarl'
+        ? this.scarHipPos
+        : w.id === 'aug'
+        ? this.augHipPos
+        : w.id === 'pistol9mm'
+        ? this.pistolHipPos
+        : this.vandalHipPos;
+    const hipRot =
+      w.id === 'scarl'
+        ? this.scarHipRot
+        : w.id === 'aug'
+        ? this.augHipRot
+        : w.id === 'pistol9mm'
+        ? this.pistolHipRot
+        : this.vandalHipRot;
+    const adsPos =
+      w.id === 'scarl'
+        ? this.scarAdsPos
+        : w.id === 'aug'
+        ? this.augAdsPos
+        : w.id === 'pistol9mm'
+        ? this.pistolAdsPos
+        : this.vandalAdsPos;
+    const adsRot =
+      w.id === 'scarl'
+        ? this.scarAdsRot
+        : w.id === 'aug'
+        ? this.augAdsRot
+        : w.id === 'pistol9mm'
+        ? this.pistolAdsRot
+        : this.vandalAdsRot;
 
     this.models.vandal.position.lerpVectors(hipPos, adsPos, adsEase);
     this.models.vandal.rotation.set(
@@ -1336,8 +1978,25 @@ export class WeaponSystem {
       THREE.MathUtils.lerp(hipRot.z, adsRot.z, adsEase)
     );
 
-    // Live SCAR-L reciprocating side charging handle & synced STANAG magazine drop/insert during reload!
-    if (isScar) {
+    // Live reciprocating bolt/slide & synced magazine drop/insert on our real 3D GLB weapons!
+    const boltPart = this.weaponBoltPart[w.id];
+    if (boltPart) {
+      const rackPull =
+        this.isReloading && this.reloadProgress > 0.72 && this.reloadProgress < 0.9
+          ? Math.sin(((this.reloadProgress - 0.72) / 0.18) * Math.PI) * 0.055
+          : 0;
+      boltPart.obj.position.z = boltPart.restZ + Math.max(0, this.kickZ) * 0.95 + rackPull;
+    }
+    const magPart = this.weaponMagPart[w.id];
+    if (magPart) {
+      let drop = 0;
+      if (this.isReloading && this.reloadProgress > 0.14 && this.reloadProgress < 0.68) {
+        drop = Math.sin(((this.reloadProgress - 0.14) / 0.54) * Math.PI) * 0.18;
+      }
+      magPart.obj.position.y = magPart.restY - drop;
+    }
+
+    if (w.id === 'scarl' && !this.weaponGlbLoaded.scarl) {
       if (this.scarBoltCarrier) {
         const rackPull =
           this.isReloading && this.reloadProgress > 0.72 && this.reloadProgress < 0.9
@@ -1392,6 +2051,34 @@ export class WeaponSystem {
       this.swayX * 1.15 * adsDamp + pullYaw,
       -this.swayX * 0.9 * adsDamp + walkBobX * 1.8 + pullRoll
     );
+
+    // Live 2-bone left-arm IK for 9MM Pistol: pulls left hand cleanly back from rifle handguard
+    // directly beneath/around right hand & 9MM pistol grip (two-handed Weaver stance — ZERO floating left hand!)
+    const wantPistolSupport = w.id === 'pistol9mm' && !this.isReloading ? 1 : 0;
+    this.pistolSupportBlend = THREE.MathUtils.lerp(
+      this.pistolSupportBlend,
+      wantPistolSupport,
+      1 - Math.exp(-18 * dt)
+    );
+    if (this.pistolSupportBlend > 0.004 && this.fpsUpperArmL && this.fpsLowerArmL && this.fpsHandL) {
+      this.models.vandal.updateMatrixWorld(true);
+      this.fpsIkTargetW.set(-0.008, -0.208, 0.282);
+      this.models.vandal.localToWorld(this.fpsIkTargetW);
+      this.fpsIkPoleW.set(-0.28, -0.44, 0.40);
+      this.models.vandal.localToWorld(this.fpsIkPoleW);
+      solveTwoBoneArmIK(
+        this.fpsUpperArmL,
+        this.fpsLowerArmL,
+        this.fpsHandL,
+        this.fpsIkTargetW,
+        this.fpsIkPoleW,
+        this.pistolSupportBlend
+      );
+      this.fpsHandL.quaternion.slerp(
+        this.fpsHandL.quaternion.clone().multiply(this.fpsHandLPistolQ),
+        this.pistolSupportBlend
+      );
+    }
 
     // Update tracers
     for (let i = this.tracers.length - 1; i >= 0; i--) {

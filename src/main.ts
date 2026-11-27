@@ -6,6 +6,7 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import {
   BOT_EMBER_ID,
+  CharacterId,
   Difficulty,
   GameMode,
   GameSettings,
@@ -21,7 +22,7 @@ import { depenetrateFromColliders } from './world/CollisionUtils';
 import { preloadDowntownGlbs } from './world/DowntownGlbAssets';
 import { PlayerController } from './player/PlayerController';
 import { WeaponSystem } from './weapons/WeaponSystem';
-import { preloadSoldierTemplate } from './entities/AgentModel';
+import { CHARACTER_OPTIONS, ensureCharacterLoaded, preloadSoldierTemplate } from './entities/AgentModel';
 import { AgentFireEvent, TacticalAgent, hasClearSight } from './entities/AgentAI';
 import { RemotePlayer } from './entities/RemotePlayer';
 import { LootDrop } from './entities/LootDrop';
@@ -175,8 +176,8 @@ class SkyfallGame {
   private bloomPass: UnrealBloomPass | null = null;
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
-  private envFactory: THREE.Texture;
-  private envFoundry: THREE.Texture;
+  private envFactory: THREE.Texture | null = null;
+  private envFoundry: THREE.Texture | null = null;
 
   private sound = new SoundEngine();
   private textures: TextureLibrary;
@@ -226,6 +227,7 @@ class SkyfallGame {
     map: 'factory',
     mode: 'tactical',
     difficulty: 'tactical',
+    character: (localStorage.getItem('skyfall_character') as CharacterId) || 'shadow',
     sensitivity: 1.0,
     volume: 0.75,
     crosshairColor: '#ffffff',
@@ -271,33 +273,56 @@ class SkyfallGame {
   private btnRestart = document.getElementById('btn-restart')!;
 
   constructor() {
-    // 1. Razor-sharp full HiDPI hardware MSAA WebGL renderer (up to 2x native DPR!)
-    const sharpDpr = Math.min(window.devicePixelRatio, 2.0);
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(sharpDpr);
+    // 1. Honor saved graphics preset (or auto-detect integrated laptop GPU) BEFORE allocating heavy VRAM!
+    const savedGfx = localStorage.getItem('skyfall_gfx') as 'bloom' | 'perf' | 'laptop' | null;
+    if (savedGfx === 'bloom' || savedGfx === 'perf' || savedGfx === 'laptop') {
+      this.graphicsPreset = savedGfx;
+      this.userPickedGraphics = true;
+    }
+
+    const initLowEnd = this.graphicsPreset === 'laptop';
+    const dprCap = this.graphicsPreset === 'bloom' ? 1.65 : this.graphicsPreset === 'perf' ? 1.0 : 0.72;
+    this.renderer = new THREE.WebGLRenderer({
+      antialias: !initLowEnd,
+      powerPreference: initLowEnd ? 'low-power' : 'high-performance',
+    });
+
+    // If user hasn't manually picked a preset yet, detect integrated/software laptop GPUs right now BEFORE bloom/PMREM!
+    if (!this.userPickedGraphics && this.detectIntegratedGpu()) {
+      const cores = navigator.hardwareConcurrency || 4;
+      this.graphicsPreset = cores <= 4 ? 'laptop' : 'perf';
+    }
+    const finalLowEnd = this.graphicsPreset === 'laptop';
+    this.bloomEnabled = this.graphicsPreset === 'bloom';
+    const finalDprCap = this.graphicsPreset === 'bloom' ? 1.65 : this.graphicsPreset === 'perf' ? 1.0 : 0.72;
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, finalDprCap));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.enabled = !finalLowEnd;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.24;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.container.appendChild(this.renderer.domElement);
 
-    // 2. Scene, Camera & Dual PMREM Environments (Sunlit Cryzen Factory + Industrial Foundry 07)
+    // 2. Scene, Camera & Lazy PMREM Environments (skipped completely in LOW END DEVICE mode to save laptop VRAM!)
     this.scene = new THREE.Scene();
-    this.envFactory = buildDaylightEnvironment(this.renderer);
-    this.envFoundry = buildIndustrialEnvironment(this.renderer);
+    if (!finalLowEnd) {
+      this.ensureEnvTextures();
+    }
     this.camera = new THREE.PerspectiveCamera(74, window.innerWidth / window.innerHeight, 0.08, 750);
     this.scene.add(this.camera);
 
-    // 3. Half-res Selective HDR Bloom Post-Processing
-    this.setupPostProcessing();
+    // 3. Only allocate Half-Float MSAA Bloom EffectComposer when BLOOM ULTRA is actually active!
+    if (this.bloomEnabled) {
+      this.setupPostProcessing();
+    }
 
     // 4. Build Active Arena Map (FACTORY CRYZEN default)
     this.textures = createTextureLibrary();
     this.applyMapAtmosphereConfig(this.settings.map);
     const builder = new LevelBuilder(this.textures);
-    this.level = builder.build(this.scene, this.settings.map);
+    this.level = builder.build(this.scene, this.settings.map, false, finalLowEnd);
+    this.applyPresetToActiveScene();
 
     // 5. Core gameplay subsystems
     this.player = new PlayerController(this.sound);
@@ -316,10 +341,10 @@ class SkyfallGame {
     this.bindTdmLobbyUI();
     this.bindInputs();
 
-    // Auto-select fast 60 FPS pipeline on laptops without a dedicated GPU (Intel UHD/Iris, integrated Radeon, software renderers)
-    if (this.detectIntegratedGpu()) {
-      this.applyGraphicsPreset('perf');
-    }
+    // Sync active graphics pill highlight in UI
+    document.querySelectorAll<HTMLButtonElement>('[data-gfx]').forEach((b) => {
+      b.classList.toggle('active', b.dataset.gfx === this.graphicsPreset);
+    });
 
     window.addEventListener('resize', () => {
       const w = window.innerWidth;
@@ -332,6 +357,11 @@ class SkyfallGame {
     });
 
     requestAnimationFrame(this.loop);
+  }
+
+  private ensureEnvTextures(): void {
+    if (!this.envFactory) this.envFactory = buildDaylightEnvironment(this.renderer);
+    if (!this.envFoundry) this.envFoundry = buildIndustrialEnvironment(this.renderer);
   }
 
   private detectIntegratedGpu(): boolean {
@@ -354,18 +384,45 @@ class SkyfallGame {
     }
   }
 
-  private applyGraphicsPreset(preset: 'bloom' | 'perf' | 'laptop'): void {
+  private applyGraphicsPreset(preset: 'bloom' | 'perf' | 'laptop', saveChoice = false): void {
+    const prevLowEnd = this.graphicsPreset === 'laptop';
     this.graphicsPreset = preset;
+    if (saveChoice) {
+      localStorage.setItem('skyfall_gfx', preset);
+    }
     this.bloomEnabled = preset === 'bloom';
+    const isLowEnd = preset === 'laptop';
     const dprCap = preset === 'bloom' ? 1.65 : preset === 'perf' ? 1.0 : 0.72;
     const dpr = Math.min(window.devicePixelRatio, dprCap);
     this.renderer.setPixelRatio(dpr);
-    this.composer?.setPixelRatio(dpr);
+
+    if (this.bloomEnabled && !this.composer) {
+      this.setupPostProcessing();
+    } else if (isLowEnd && this.composer) {
+      // Immediately release heavy Half-Float MSAA bloom framebuffer when switching to LOW END DEVICE!
+      this.composer.dispose();
+      this.composer = null;
+      this.bloomPass = null;
+    } else if (this.composer) {
+      this.composer.setPixelRatio(dpr);
+    }
+
+    if (!isLowEnd) {
+      this.ensureEnvTextures();
+    }
 
     const wantShadows = preset !== 'laptop';
     if (this.renderer.shadowMap.enabled !== wantShadows) {
       this.renderer.shadowMap.enabled = wantShadows;
       this.renderer.shadowMap.needsUpdate = true;
+    }
+
+    // If currently on Downtown and toggling LOW END DEVICE on/off, swap cleanly between low/full city GLB!
+    if (prevLowEnd !== isLowEnd && this.settings.map === 'downtown' && this.levelIsTdmExpanded) {
+      this.applyMapAtmosphereConfig('downtown');
+      if (this.level?.group) this.scene.remove(this.level.group);
+      const builder = new LevelBuilder(this.textures);
+      this.level = builder.build(this.scene, 'downtown', true, isLowEnd);
     }
 
     this.applyPresetToActiveScene();
@@ -417,11 +474,11 @@ class SkyfallGame {
     try {
       const w = window.innerWidth;
       const h = window.innerHeight;
-      const dpr = Math.min(window.devicePixelRatio, 2.0);
+      const dpr = Math.min(window.devicePixelRatio, 1.65);
       const maxSamples = this.renderer.capabilities.isWebGL2
-        ? Math.min(8, this.renderer.capabilities.maxSamples || 4)
+        ? Math.min(4, this.renderer.capabilities.maxSamples || 2)
         : 0;
-      // Full-DPR multi-sampled MSAA render target so guns & characters stay razor-sharp even with Bloom!
+      // Multi-sampled MSAA render target capped at 4x so laptop WebGL2 drivers never OOM!
       const rt = new THREE.WebGLRenderTarget(Math.floor(w * dpr), Math.floor(h * dpr), {
         type: THREE.HalfFloatType,
         samples: maxSamples,
@@ -455,7 +512,8 @@ class SkyfallGame {
   private applyMapAtmosphereConfig(mapId: MapId): void {
     const isFactory = mapId === 'factory';
     const isDowntown = mapId === 'downtown';
-    this.scene.environment = isFactory ? this.envFactory : this.envFoundry;
+    this.scene.environment =
+      this.graphicsPreset === 'laptop' ? null : isFactory ? this.envFactory : this.envFoundry;
     this.renderer.toneMappingExposure = isFactory ? 1.15 : isDowntown ? 1.2 : 1.24;
     if (this.bloomPass) {
       // Selective HDR Bloom tuned per map: crisp sunlit Vikendi, neon-cyberpunk Midtown Manhattan, glowing Warehouse!
@@ -487,7 +545,7 @@ class SkyfallGame {
 
     this.applyMapAtmosphereConfig(mapId);
     const builder = new LevelBuilder(this.textures);
-    this.level = builder.build(this.scene, mapId, false);
+    this.level = builder.build(this.scene, mapId, false, this.graphicsPreset === 'laptop');
     this.applyPresetToActiveScene();
 
     const mmCanvas = document.getElementById('minimap-canvas') as HTMLCanvasElement;
@@ -504,6 +562,7 @@ class SkyfallGame {
 
   private setupShowcaseFrame(): void {
     this.player.reset(this.level.playerSpawn.pos, this.level.playerSpawn.yaw);
+    this.weapons.setCharacterTheme(this.settings.character, 'ally');
     this.weapons.resetAll();
     this.spawnAgentsForRound(true);
     this.camera.position.set(
@@ -557,7 +616,30 @@ class SkyfallGame {
       btn.addEventListener('click', () => {
         this.userPickedGraphics = true;
         const preset = (btn.dataset.gfx as 'bloom' | 'perf' | 'laptop') || 'perf';
-        this.applyGraphicsPreset(preset);
+        this.applyGraphicsPreset(preset, true);
+      });
+    });
+
+    const syncCharUi = (charId: CharacterId) => {
+      document.querySelectorAll<HTMLButtonElement>('[data-char]').forEach((b) => {
+        b.classList.toggle('active', b.dataset.char === charId);
+      });
+    };
+    syncCharUi(this.settings.character);
+    this.weapons.setCharacterTheme(this.settings.character);
+    void ensureCharacterLoaded(this.settings.character);
+
+    document.querySelectorAll<HTMLButtonElement>('[data-char]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const charId = (btn.dataset.char as CharacterId) || 'shadow';
+        this.settings.character = charId;
+        localStorage.setItem('skyfall_character', charId);
+        syncCharUi(charId);
+        this.weapons.setCharacterTheme(charId);
+        void ensureCharacterLoaded(charId);
+        if (this.mp.connected && this.mp.lobbyState && !this.mp.lobbyState.inMatch) {
+          this.mp.setCharacter(charId);
+        }
       });
     });
 
@@ -703,6 +785,12 @@ class SkyfallGame {
       } else if (e.code === 'Digit2') {
         if (this.activeHeal) this.cancelActiveHeal(false);
         this.weapons.selectSlot(1);
+      } else if (e.code === 'Digit3') {
+        if (this.activeHeal) this.cancelActiveHeal(false);
+        this.weapons.selectSlot(2);
+      } else if (e.code === 'Digit4') {
+        if (this.activeHeal) this.cancelActiveHeal(false);
+        this.weapons.selectSlot(3);
       } else if (e.code === 'KeyR') {
         if (this.activeHeal) this.cancelActiveHeal(false);
         this.weapons.startReload();
@@ -835,6 +923,7 @@ class SkyfallGame {
     this.hud.hideDamageHistory();
 
     this.player.reset(this.level.playerSpawn.pos, this.level.playerSpawn.yaw);
+    this.weapons.setCharacterTheme(this.settings.character, 'ally');
     this.weapons.resetAll();
     this.weapons.clearRoundFx();
     this.abilities.resetCharges();
@@ -877,7 +966,10 @@ class SkyfallGame {
       });
     }
 
+    // Enemies in Vikendi & Warehouse ALWAYS use the default CoD Modern Warfare Shadow Company character!
     this.level.enemySpawns.forEach((sp, idx) => {
+      const enemyChar: CharacterId | undefined =
+        this.settings.map === 'factory' || this.settings.map === 'foundry' ? 'shadow' : undefined;
       const enemy = new TacticalAgent(
         `enemy-${idx}`,
         sp.name,
@@ -886,7 +978,8 @@ class SkyfallGame {
         sp.pos,
         sp.yaw,
         this.scene,
-        this.textures
+        this.textures,
+        enemyChar
       );
       const hold = idx === 0 ? (showcaseOnly ? 99 : 2.6) : 0.4 + idx * 0.3;
       enemy.respawn(sp.pos, sp.yaw, hold);
@@ -1110,7 +1203,7 @@ class SkyfallGame {
       this.hideTdmError();
       const clean = sanitizePlayerName(nameInput.value);
       if (clean) localStorage.setItem('skyfall_tdm_name', clean);
-      this.mp.hostLobby(nameInput.value, this.tdmHostSelectedMap);
+      this.mp.hostLobby(nameInput.value, this.tdmHostSelectedMap, this.settings.character);
     });
 
     document.getElementById('btn-tdm-join')!.addEventListener('click', () => {
@@ -1118,7 +1211,7 @@ class SkyfallGame {
       this.hideTdmError();
       const clean = sanitizePlayerName(nameInput.value);
       if (clean) localStorage.setItem('skyfall_tdm_name', clean);
-      const started = this.mp.joinLobby(nameInput.value, codeInput.value);
+      const started = this.mp.joinLobby(nameInput.value, codeInput.value, this.settings.character);
       if (started && !this.mp.connected) {
         this.setTdmJoinButtonBusy(true);
       } else if (!started && !clean) {
@@ -1194,7 +1287,9 @@ class SkyfallGame {
   }
 
   private openTdmLobbyOverlay(): void {
-    preloadDowntownGlbs();
+    if (this.tdmHostSelectedMap === 'downtown') {
+      preloadDowntownGlbs(this.graphicsPreset === 'laptop');
+    }
     this.setTdmJoinButtonBusy(false);
     this.hideTdmError();
     this.menuOverlay.classList.add('hidden');
@@ -1301,6 +1396,12 @@ class SkyfallGame {
           nameSpan.textContent = p.name;
           const badgeWrap = document.createElement('span');
           badgeWrap.className = 'tdm-slot-badges';
+          const charId = p.isBot ? 'shadow' : (p.characterId ?? 'shadow');
+          const charLabel = CHARACTER_OPTIONS.find((c) => c.id === charId)?.label ?? 'SHADOW';
+          const ch = document.createElement('span');
+          ch.className = 'tdm-badge char';
+          ch.textContent = charLabel;
+          badgeWrap.appendChild(ch);
           if (p.isHost) {
             const h = document.createElement('span');
             h.className = 'tdm-badge host';
@@ -1391,8 +1492,8 @@ class SkyfallGame {
 
     this.applyMapAtmosphereConfig(mapId);
     const builder = new LevelBuilder(this.textures);
-    // Build the 3x-expanded 2-floor Team Death Match arena (Vikendi TDM / Warehouse TDM)!
-    this.level = builder.build(this.scene, mapId, true);
+    // Build the 3x-expanded 2-floor Team Death Match arena (Vikendi TDM / Warehouse TDM / Downtown)!
+    this.level = builder.build(this.scene, mapId, true, this.graphicsPreset === 'laptop');
     this.applyPresetToActiveScene();
 
     const mmCanvas = document.getElementById('minimap-canvas') as HTMLCanvasElement;
@@ -1411,7 +1512,7 @@ class SkyfallGame {
       ];
       return {
         pos: slots[slotIndex % slots.length].clone(),
-        yaw: 0.0, // Camera looks -Z (North, straight into the arena)
+        yaw: this.level.playerSpawn.yaw,
       };
     }
     const redSlots =
@@ -1420,7 +1521,7 @@ class SkyfallGame {
         : [new THREE.Vector3(0, 0, -25.5)];
     return {
       pos: redSlots[slotIndex % redSlots.length].clone(),
-      yaw: Math.PI, // Camera looks +Z (South, straight toward Blue Team)
+      yaw: this.level.enemySpawns[0]?.yaw ?? Math.PI,
     };
   }
 
@@ -1476,17 +1577,38 @@ class SkyfallGame {
 
     const localP = state.players.find((p) => p.id === this.mp.localPlayerId);
     this.tdmLocalTeam = localP?.team ?? 'blue';
+    this.weapons.setCharacterTheme(
+      localP?.characterId ?? this.settings.character,
+      this.tdmLocalTeam === 'red' ? 'enemy' : 'ally'
+    );
 
-    // Spawn 3rd-person rigged soldier avatars for EVERY other player (teammates + enemies!)
-    for (const p of state.players) {
-      if (p.id === this.mp.localPlayerId) continue;
-      const spData = round.spawns.find((s) => s.id === p.id);
-      const spPos = spData
-        ? new THREE.Vector3(spData.pos.x, spData.pos.y, spData.pos.z)
-        : this.getTeamSpawn(p.team, p.slotIndex).pos;
-      const spYaw = spData ? spData.yaw : this.getTeamSpawn(p.team, p.slotIndex).yaw;
-      const rp = new RemotePlayer(p.id, p.name, p.team, spPos, spYaw, this.scene, this.textures);
-      this.remotePlayers.set(p.id, rp);
+    // Spawn 3rd-person rigged avatars for EVERY other player (EMBER bot is ALWAYS default CoD MW Shadow;
+    // human players render as their chosen character, and multiple players may use the same character!)
+    const spawnOtherPlayers = () => {
+      if (!this.isTdmMatch) return;
+      for (const p of state.players) {
+        if (p.id === this.mp.localPlayerId || this.remotePlayers.has(p.id)) continue;
+        const spData = round.spawns.find((s) => s.id === p.id);
+        const spPos = spData
+          ? new THREE.Vector3(spData.pos.x, spData.pos.y, spData.pos.z)
+          : this.getTeamSpawn(p.team, p.slotIndex).pos;
+        const spYaw = spData ? spData.yaw : this.getTeamSpawn(p.team, p.slotIndex).yaw;
+        const charId: CharacterId = p.isBot || p.id === BOT_EMBER_ID ? 'shadow' : (p.characterId ?? 'shadow');
+        const rp = new RemotePlayer(p.id, p.name, p.team, spPos, spYaw, this.scene, this.textures, charId);
+        this.remotePlayers.set(p.id, rp);
+      }
+    };
+    const neededChars = Array.from(
+      new Set(
+        state.players
+          .filter((p) => p.id !== this.mp.localPlayerId && !p.isBot && p.id !== BOT_EMBER_ID)
+          .map((p) => p.characterId ?? 'shadow')
+      )
+    );
+    if (neededChars.length > 0) {
+      void Promise.all(neededChars.map((cid) => ensureCharacterLoaded(cid))).then(spawnOtherPlayers);
+    } else {
+      spawnOtherPlayers();
     }
 
     this.applyTdmRoundStart(round);
@@ -2241,6 +2363,10 @@ class SkyfallGame {
     const atten = Math.max(0.12, 1 - dist / 42);
     if (shot.weaponId === 'scarl') {
       this.sound.playScarShot(atten * 0.78);
+    } else if (shot.weaponId === 'aug') {
+      this.sound.playAugShot(atten * 0.78);
+    } else if (shot.weaponId === 'pistol9mm') {
+      this.sound.playGhostShot(atten * 0.78);
     } else {
       this.sound.playVandalShot(atten * 0.78);
     }
@@ -3201,8 +3327,8 @@ class SkyfallGame {
     // Animated burning braziers, snowflakes, neon pulse & Downtown GTA-style civilian NPCs!
     this.level.updateAtmosphere(dt, elapsed, this.player.pos);
 
-    // Universal Auto-60-FPS Booster: steps down Bloom -> Direct 1.0 DPR -> Low End Device if FPS drops below ~38!
-    if (!this.userPickedGraphics && !this.paused && this.graphicsPreset !== 'laptop') {
+    // Universal Auto-60-FPS Booster: after initial 5s GLB/shader warm-up, steps down only if FPS stays persistently below ~38!
+    if (!this.userPickedGraphics && !this.paused && this.graphicsPreset !== 'laptop' && elapsed > 5.0) {
       if (dt > 0.0265) {
         this.tdmSlowFrameAccum += dt;
         if (this.tdmSlowFrameAccum > 1.35) {

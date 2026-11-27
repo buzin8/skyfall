@@ -233,6 +233,8 @@ export class HUD {
       this.elFireMode.textContent = weapon.fireMode;
       document.getElementById('wslot-0')?.classList.toggle('active', slotIndex === 0);
       document.getElementById('wslot-1')?.classList.toggle('active', slotIndex === 1);
+      document.getElementById('wslot-2')?.classList.toggle('active', slotIndex === 2);
+      document.getElementById('wslot-3')?.classList.toggle('active', slotIndex === 3);
       this.lastMag = -99;
       this.lastRes = -99;
     }

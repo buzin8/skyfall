@@ -1,6 +1,7 @@
 import Peer, { DataConnection } from 'peerjs';
 import {
   BOT_EMBER_ID,
+  CharacterId,
   LobbyPlayer,
   LobbyState,
   LobbyTeam,
@@ -146,10 +147,11 @@ export interface MatchEndPayload {
 }
 
 type WirePacket =
-  | { type: 'JOIN_REQ'; playerId: string; name: string }
+  | { type: 'JOIN_REQ'; playerId: string; name: string; characterId?: CharacterId }
   | { type: 'WELCOME'; state: LobbyState; assignedId: string }
   | { type: 'JOIN_REJECT'; reason: string }
   | { type: 'SWITCH_TEAM'; playerId: string; team: LobbyTeam }
+  | { type: 'SELECT_CHARACTER'; playerId: string; characterId: CharacterId }
   | { type: 'LOBBY_STATE'; state: LobbyState }
   | { type: 'LEAVE'; playerId: string }
   | { type: 'HOST_CLOSED' }
@@ -318,7 +320,7 @@ export class MultiplayerManager {
     return { ok: true, reason: `READY // BLUE ${blue}v${red} RED` };
   }
 
-  public hostLobby(rawName: string, map: MapId): boolean {
+  public hostLobby(rawName: string, map: MapId, characterId: CharacterId = 'shadow'): boolean {
     const name = sanitizePlayerName(rawName);
     if (!name) {
       this.cb.onError('Enter your player name before hosting.');
@@ -338,6 +340,7 @@ export class MultiplayerManager {
           id: this.localPlayerId,
           name,
           team: 'blue',
+          characterId,
           isHost: true,
           slotIndex: 0,
           kills: 0,
@@ -347,6 +350,7 @@ export class MultiplayerManager {
           id: BOT_EMBER_ID,
           name: 'EMBER',
           team: 'red',
+          characterId: 'shadow',
           isHost: false,
           isBot: true,
           slotIndex: 0,
@@ -428,7 +432,7 @@ export class MultiplayerManager {
     }, 2500);
   }
 
-  public joinLobby(rawName: string, rawCode: string): boolean {
+  public joinLobby(rawName: string, rawCode: string, characterId: CharacterId = 'shadow'): boolean {
     const name = sanitizePlayerName(rawName);
     const code = sanitizeRoomCode(rawCode);
     if (!name) {
@@ -448,7 +452,7 @@ export class MultiplayerManager {
 
     // 1. Try instant BroadcastChannel first (same-origin tabs connect in < 15ms)
     this.openBroadcastChannel(code);
-    this.postLocal('*', { type: 'JOIN_REQ', playerId: this.localPlayerId, name });
+    this.postLocal('*', { type: 'JOIN_REQ', playerId: this.localPlayerId, name, characterId });
 
     // 2. Simultaneously connect over PeerJS WebRTC (with automatic legacy sunfire-tdm- fallback + 1s host-warmup & ICE retry!)
     let triedLegacyPrefix = false;
@@ -482,7 +486,7 @@ export class MultiplayerManager {
           if (this.connected || this.activeClientLink === 'local' || this.hostConn !== conn) return;
           if (conn.open || conn.dataChannel?.readyState === 'open') {
             try {
-              conn.send({ type: 'JOIN_REQ', playerId: this.localPlayerId, name } satisfies WirePacket);
+              conn.send({ type: 'JOIN_REQ', playerId: this.localPlayerId, name, characterId } satisfies WirePacket);
             } catch {}
           }
         };
@@ -591,7 +595,7 @@ export class MultiplayerManager {
     // Also retry BroadcastChannel JOIN_REQ once after 500ms in case local host tab was waking up
     window.setTimeout(() => {
       if (!this.connected && !this.isHost && this.bcChannels.length > 0) {
-        this.postLocal('*', { type: 'JOIN_REQ', playerId: this.localPlayerId, name });
+        this.postLocal('*', { type: 'JOIN_REQ', playerId: this.localPlayerId, name, characterId });
       }
     }, 500);
 
@@ -621,6 +625,18 @@ export class MultiplayerManager {
     }
   }
 
+  /**
+   * Lets any player freely choose ANY character before match start (multiple users may pick the same character!).
+   */
+  public setCharacter(characterId: CharacterId): void {
+    if (!this.lobbyState || this.lobbyState.inMatch) return;
+    if (this.isHost) {
+      this.applySelectCharacterOnHost(this.localPlayerId, characterId);
+    } else {
+      this.sendToHost({ type: 'SELECT_CHARACTER', playerId: this.localPlayerId, characterId });
+    }
+  }
+
   public removeBotEmber(): void {
     if (!this.isHost || !this.lobbyState || this.lobbyState.inMatch) return;
     const before = this.lobbyState.players.length;
@@ -641,6 +657,7 @@ export class MultiplayerManager {
       id: BOT_EMBER_ID,
       name: 'EMBER',
       team: 'red',
+      characterId: 'shadow',
       isHost: false,
       isBot: true,
       slotIndex: redCount,
@@ -934,6 +951,7 @@ export class MultiplayerManager {
         id: pkt.playerId,
         name: cleanName,
         team: assignedTeam,
+        characterId: pkt.characterId ?? 'shadow',
         isHost: false,
         slotIndex,
         kills: 0,
@@ -950,6 +968,11 @@ export class MultiplayerManager {
 
     if (pkt.type === 'SWITCH_TEAM') {
       this.applySwitchTeamOnHost(pkt.playerId, pkt.team);
+      return;
+    }
+
+    if (pkt.type === 'SELECT_CHARACTER') {
+      this.applySelectCharacterOnHost(pkt.playerId, pkt.characterId);
       return;
     }
 
@@ -996,6 +1019,17 @@ export class MultiplayerManager {
     if (targetCount >= MAX_PLAYERS_PER_TEAM) return;
     player.team = targetTeam;
     this.reindexTeamSlots();
+    const state = this.cloneLobbyState();
+    this.broadcastFromHost({ type: 'LOBBY_STATE', state });
+    this.cb.onLobbyState(state);
+  }
+
+  private applySelectCharacterOnHost(playerId: string, characterId: CharacterId): void {
+    if (!this.lobbyState || this.lobbyState.inMatch) return;
+    const player = this.lobbyState.players.find((p) => p.id === playerId);
+    if (!player || player.isBot) return;
+    // Allow multiple players in TDM to freely pick the exact same character!
+    player.characterId = characterId;
     const state = this.cloneLobbyState();
     this.broadcastFromHost({ type: 'LOBBY_STATE', state });
     this.cb.onLobbyState(state);

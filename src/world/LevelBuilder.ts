@@ -155,9 +155,9 @@ export class LevelBuilder {
     });
   }
 
-  public build(scene: THREE.Scene, mapId: MapId = 'factory', tdmExpanded = false): BuiltLevel {
+  public build(scene: THREE.Scene, mapId: MapId = 'factory', tdmExpanded = false, isLowEnd = false): BuiltLevel {
     if (tdmExpanded) {
-      return new TdmLevelBuilder(this.tex).build(scene, mapId);
+      return new TdmLevelBuilder(this.tex).build(scene, mapId, isLowEnd);
     }
     if (mapId === 'factory') {
       return this.buildCryzenFactory(scene);

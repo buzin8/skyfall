@@ -220,7 +220,9 @@
           </div>
           <div class="weapon-slots">
             <div class="w-slot active" id="wslot-0"><span>1</span> AKM</div>
-            <div class="w-slot" id="wslot-1"><span>2</span> SCAR-L</div>
+            <div class="w-slot" id="wslot-1"><span>2</span> SCAR-H</div>
+            <div class="w-slot" id="wslot-2"><span>3</span> AUG A4</div>
+            <div class="w-slot" id="wslot-3"><span>4</span> 9MM</div>
           </div>
         </div>
       </div>
@@ -231,7 +233,7 @@
         <span><b>SHIFT</b> Walk</span>
         <span><b>CTRL</b> Crouch</span>
         <span><b>LMB/RMB</b> Fire/ADS</span>
-        <span><b>1/2</b> AKM/SCAR-L</span>
+        <span><b>1-4</b> AKM/SCAR/AUG/9MM</span>
         <span><b>R</b> Reload</span>
         <span><b>Q E C</b> Utils</span>
         <span class="tdm-ctrl-hint hidden"><b>B</b> Bandage</span>
@@ -317,6 +319,20 @@
             </div>
 
             <div class="setting-row">
+              <label>Select Character</label>
+              <div class="pill-row char-pill-grid" id="char-pills">
+                <button class="pill active" data-char="shadow" type="button">SHADOW</button>
+                <button class="pill" data-char="spiderman" type="button">SPIDER-MAN</button>
+                <button class="pill" data-char="deadpool" type="button">DEADPOOL</button>
+                <button class="pill" data-char="gambit" type="button">GAMBIT</button>
+                <button class="pill" data-char="rogue" type="button">ROGUE</button>
+                <button class="pill" data-char="luffy" type="button">LUFFY</button>
+                <button class="pill" data-char="naruto" type="button">NARUTO</button>
+                <button class="pill" data-char="bailarina" type="button">BAILARINA</button>
+              </div>
+            </div>
+
+            <div class="setting-row">
               <label>Graphics Pipeline</label>
               <div class="pill-row" id="graphics-pills">
                 <button class="pill active" data-gfx="bloom">VIBRANT BLOOM</button>
@@ -326,7 +342,7 @@
             </div>
 
             <div class="tactical-tip">
-              <b>TIP:</b> Press <b>1 / 2</b> (or scroll) to swap between <b>AKM</b> and <b>SCAR-L</b>. Use <b>C (Frag)</b> to flush cover, <b>E (Smoke)</b> to block sightlines, and <b>Q (Flash)</b> before peeking.
+              <b>TIP:</b> Press <b>1 / 2 / 3 / 4</b> (or scroll) to swap between <b>AKM</b>, <b>SCAR-H</b>, <b>AUG A4</b>, and <b>9MM</b>. Use <b>C (Frag)</b>, <b>E (Smoke)</b>, and <b>Q (Flash)</b>.
             </div>
           </div>
         </div>
@@ -347,7 +363,7 @@
 
         <div id="tdm-error" class="tdm-error hidden"></div>
 
-        <!-- Quick Graphics Pipeline Selector (always accessible while joining or waiting in TDM!) -->
+        <!-- Quick Graphics Pipeline & Character Selector (always accessible before match starts!) -->
         <div class="tdm-perf-bar">
           <div class="tdm-perf-group">
             <span class="tdm-perf-label">GRAPHICS PIPELINE</span>
@@ -355,6 +371,19 @@
               <button class="pill active" data-gfx="bloom" type="button">VIBRANT BLOOM</button>
               <button class="pill" data-gfx="perf" type="button">MAX 60 FPS</button>
               <button class="pill" data-gfx="laptop" type="button">LOW END DEVICE</button>
+            </div>
+          </div>
+          <div class="tdm-perf-group" style="margin-top: 8px;">
+            <span class="tdm-perf-label">SELECT CHARACTER <small style="opacity:0.7">(MULTIPLE PLAYERS CAN PICK SAME)</small></span>
+            <div class="pill-row char-pill-grid" id="tdm-char-pills">
+              <button class="pill active" data-char="shadow" type="button">SHADOW</button>
+              <button class="pill" data-char="spiderman" type="button">SPIDER-MAN</button>
+              <button class="pill" data-char="deadpool" type="button">DEADPOOL</button>
+              <button class="pill" data-char="gambit" type="button">GAMBIT</button>
+              <button class="pill" data-char="rogue" type="button">ROGUE</button>
+              <button class="pill" data-char="luffy" type="button">LUFFY</button>
+              <button class="pill" data-char="naruto" type="button">NARUTO</button>
+              <button class="pill" data-char="bailarina" type="button">BAILARINA</button>
             </div>
           </div>
         </div>
@@ -404,7 +433,7 @@
 
           <div class="tdm-loadout-bar">
             <span>EQUAL LOADOUT:</span>
-            <b>1× AKM 7.62</b> • <b>1× SCAR-L</b> • <b>2× FRAG (C)</b> • <b>2× SMOKE (E)</b> • <b>2× FLASH (Q)</b> • <b>4× BANDAGE (B, 5s/+25HP)</b> • <b>1× MEDKIT (M, 10s/+75HP)</b> • <b>LOOT DEAD (F)</b>
+            <b>AKM 7.62</b> • <b>SCAR-H</b> • <b>AUG A4</b> • <b>9MM</b> • <b>2× FRAG (C)</b> • <b>2× SMOKE (E)</b> • <b>2× FLASH (Q)</b> • <b>4× BANDAGE (B)</b> • <b>1× MEDKIT (M)</b>
           </div>
         </div>
 
