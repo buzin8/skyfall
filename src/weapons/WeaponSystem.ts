@@ -16,9 +16,9 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     id: 'vandal',
     name: 'AKM 7.62',
     fireMode: 'AUTO',
-    damageBody: 40,
-    damageHead: 160,
-    damageLeg: 32,
+    damageBody: 20,
+    damageHead: 40,
+    damageLeg: 20,
     fireRate: 9.8,
     magSize: 30,
     reserveMax: 120,
@@ -39,9 +39,9 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     id: 'scarl',
     name: 'SCAR-H',
     fireMode: 'AUTO',
-    damageBody: 38,
-    damageHead: 152,
-    damageLeg: 30,
+    damageBody: 20,
+    damageHead: 40,
+    damageLeg: 20,
     fireRate: 10.2,
     magSize: 30,
     reserveMax: 120,
@@ -62,9 +62,9 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     id: 'aug',
     name: 'AUG A4',
     fireMode: 'AUTO',
-    damageBody: 36,
-    damageHead: 146,
-    damageLeg: 29,
+    damageBody: 20,
+    damageHead: 40,
+    damageLeg: 20,
     fireRate: 10.8,
     magSize: 30,
     reserveMax: 120,
@@ -85,9 +85,9 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     id: 'pistol9mm',
     name: '9MM PISTOL',
     fireMode: 'SEMI',
-    damageBody: 30,
-    damageHead: 112,
-    damageLeg: 24,
+    damageBody: 20,
+    damageHead: 40,
+    damageLeg: 20,
     fireRate: 8.8,
     magSize: 15,
     reserveMax: 75,
@@ -224,25 +224,25 @@ export class WeaponSystem {
   private bobPhase = 0;
   private breathPhase = 0;
 
-  // Crisp full-size bottom-right hipfire & dead-center iron-sight ADS framing (zero near-plane clipping!)
+  // Crisp full-size bottom-right hipfire & crystal-clear unobstructed ADS framing (zero near-plane clipping or blocked sights!)
   private readonly vandalHipPos = new THREE.Vector3(0.215, -0.168, -0.44);
   private readonly vandalHipRot = new THREE.Euler(0.012, 0.052, -0.012);
-  private readonly vandalAdsPos = new THREE.Vector3(0.0, -0.062, -0.42);
+  private readonly vandalAdsPos = new THREE.Vector3(0.0, -0.072, -0.46);
   private readonly vandalAdsRot = new THREE.Euler(0.0, 0.0, 0.0);
 
   private readonly scarHipPos = new THREE.Vector3(0.215, -0.166, -0.44);
   private readonly scarHipRot = new THREE.Euler(0.012, 0.055, -0.012);
-  private readonly scarAdsPos = new THREE.Vector3(0.0, -0.098, -0.44);
+  private readonly scarAdsPos = new THREE.Vector3(0.0, -0.1375, -0.41);
   private readonly scarAdsRot = new THREE.Euler(0.0, 0.0, 0.0);
 
   private readonly augHipPos = new THREE.Vector3(0.215, -0.168, -0.43);
   private readonly augHipRot = new THREE.Euler(0.012, 0.052, -0.012);
-  private readonly augAdsPos = new THREE.Vector3(0.0, -0.092, -0.42);
+  private readonly augAdsPos = new THREE.Vector3(-0.0016, -0.1055, -0.46);
   private readonly augAdsRot = new THREE.Euler(0.0, 0.0, 0.0);
 
   private readonly pistolHipPos = new THREE.Vector3(0.152, -0.092, -0.49);
   private readonly pistolHipRot = new THREE.Euler(0.008, 0.042, -0.008);
-  private readonly pistolAdsPos = new THREE.Vector3(0.0, -0.022, -0.50);
+  private readonly pistolAdsPos = new THREE.Vector3(0.0, -0.026, -0.52);
   private readonly pistolAdsRot = new THREE.Euler(0.0, 0.0, 0.0);
 
   public viewmodelRoot = new THREE.Group();
@@ -590,24 +590,21 @@ export class WeaponSystem {
         }),
       };
     } else if (characterId === 'bailarina') {
-      // Bailarina: Rich crimson-rose velvet sleeve with gold trim + sleek black satin fingerless gloves + fair skin fingers!
+      // Bailarina: Seamless bare warm sun-kissed peach-tan arms, wrists & bare hands matching bailarina.glb (zero sleeves, stripes, or gloves!)
+      const drawBailarinaSkin = (ctx: CanvasRenderingContext2D, sz: number) => {
+        const grad = ctx.createLinearGradient(0, 0, sz, sz);
+        grad.addColorStop(0.0, '#e6b89c');
+        grad.addColorStop(0.55, '#dca98b');
+        grad.addColorStop(1.0, '#cfa082');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, sz, sz);
+        ctx.fillStyle = 'rgba(255, 224, 206, 0.07)';
+        ctx.fillRect(0, sz * 0.12, sz, sz * 0.28);
+      };
       result = {
-        shirtMap: mkCanvas((ctx, sz) => {
-          ctx.fillStyle = '#b41e52';
-          ctx.fillRect(0, 0, sz, sz);
-          drawMicroWeave(ctx, sz, 0.08, 6);
-          ctx.fillStyle = '#e0b862';
-          ctx.fillRect(0, sz * 0.84, sz, 10);
-        }),
-        gloveMap: mkCanvas((ctx, sz) => {
-          ctx.fillStyle = '#1e1824';
-          ctx.fillRect(0, 0, sz, sz);
-          drawMicroWeave(ctx, sz, 0.08, 5);
-        }),
-        skinMap: mkCanvas((ctx, sz) => {
-          ctx.fillStyle = '#edd2c0';
-          ctx.fillRect(0, 0, sz, sz);
-        }),
+        shirtMap: mkCanvas((ctx, sz) => drawBailarinaSkin(ctx, sz)),
+        gloveMap: mkCanvas((ctx, sz) => drawBailarinaSkin(ctx, sz)),
+        skinMap: mkCanvas((ctx, sz) => drawBailarinaSkin(ctx, sz)),
       };
     } else {
       // CoD Modern Warfare Operator: Blue Snow Army Camo (Blue Team / Solo) or Light Red Army Camo (Red Team)
@@ -689,9 +686,9 @@ export class WeaponSystem {
         skinEm: 0x362014, skinEmI: 0.14, skinRough: 0.72,
       },
       bailarina: {
-        shirtEm: 0x3c081c, shirtEmI: 0.22, shirtRough: 0.48,
-        gloveEm: 0x120c18, gloveEmI: 0.18, gloveRough: 0.36,
-        skinEm: 0x38241c, skinEmI: 0.14, skinRough: 0.7,
+        shirtEm: 0x3a241b, shirtEmI: 0.13, shirtRough: 0.72,
+        gloveEm: 0x3a241b, gloveEmI: 0.13, gloveRough: 0.72,
+        skinEm: 0x3a241b, skinEmI: 0.13, skinRough: 0.72,
       },
     };
 
@@ -702,7 +699,7 @@ export class WeaponSystem {
       m.emissive.setHex(s.shirtEm);
       m.emissiveIntensity = s.shirtEmI;
       m.roughness = s.shirtRough;
-      m.metalness = characterId === 'spiderman' ? 0.08 : 0.04;
+      m.metalness = characterId === 'bailarina' ? 0.0 : characterId === 'spiderman' ? 0.08 : 0.04;
       m.needsUpdate = true;
     }
     for (const m of this.armsGloveMats) {
@@ -711,7 +708,14 @@ export class WeaponSystem {
       m.emissive.setHex(s.gloveEm);
       m.emissiveIntensity = s.gloveEmI;
       m.roughness = s.gloveRough;
-      m.metalness = characterId === 'gambit' ? 0.28 : characterId === 'spiderman' ? 0.08 : 0.12;
+      m.metalness =
+        characterId === 'bailarina'
+          ? 0.0
+          : characterId === 'gambit'
+          ? 0.28
+          : characterId === 'spiderman'
+          ? 0.08
+          : 0.12;
       m.needsUpdate = true;
     }
     for (const m of this.armsSkinMats) {
@@ -720,7 +724,7 @@ export class WeaponSystem {
       m.emissive.setHex(s.skinEm);
       m.emissiveIntensity = s.skinEmI;
       m.roughness = s.skinRough;
-      m.metalness = characterId === 'spiderman' ? 0.08 : 0.02;
+      m.metalness = characterId === 'bailarina' ? 0.0 : characterId === 'spiderman' ? 0.08 : 0.02;
       m.needsUpdate = true;
     }
   }
@@ -926,6 +930,118 @@ export class WeaponSystem {
   }
 
   /**
+   * Builds a sleek, ultra-thin open-window Tactical Reflex Red-Dot Sight mounted onto a Picatinny rail
+   * (reticle center sits cleanly at y = riserH + 0.021 above the rail with 100% unobstructed glass!).
+   */
+  private buildTacticalReflexOptic(riserH: number): THREE.Group {
+    const grp = new THREE.Group();
+    const housingMat = new THREE.MeshStandardMaterial({
+      color: 0x1e232c,
+      roughness: 0.44,
+      metalness: 0.52,
+      emissive: new THREE.Color(0x090b10),
+      emissiveIntensity: 0.16,
+    });
+    const clampMat = new THREE.MeshStandardMaterial({
+      color: 0x2c3442,
+      roughness: 0.36,
+      metalness: 0.72,
+    });
+
+    // Quick-detach rail clamp & slim riser pedestal
+    const base = new THREE.Mesh(new THREE.BoxGeometry(0.028, Math.max(0.008, riserH), 0.056), housingMat);
+    base.position.set(0, riserH * 0.5, 0);
+    grp.add(base);
+
+    // Side mounting thumbscrew accent
+    const screw = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.006, 10), clampMat);
+    screw.rotation.z = Math.PI / 2;
+    screw.position.set(0.016, Math.max(0.004, riserH * 0.42), 0.012);
+    grp.add(screw);
+
+    // Sleek slim lower deck right under the open glass window
+    const deckY = riserH + 0.003;
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.006, 0.044), housingMat);
+    deck.position.set(0, deckY, 0);
+    grp.add(deck);
+
+    // Ultra-thin rounded open-window reflex frame (wide clear view, zero thick walls blocking sight!)
+    const mkRect = (w: number, h: number, r: number): THREE.Shape => {
+      const hw = w * 0.5;
+      const hh = h * 0.5;
+      const s = new THREE.Shape();
+      s.moveTo(-hw + r, -hh);
+      s.lineTo(hw - r, -hh);
+      s.quadraticCurveTo(hw, -hh, hw, -hh + r);
+      s.lineTo(hw, hh - r);
+      s.quadraticCurveTo(hw, hh, hw - r, hh);
+      s.lineTo(-hw + r, hh);
+      s.quadraticCurveTo(-hw, hh, -hw, hh - r);
+      s.lineTo(-hw, -hh + r);
+      s.quadraticCurveTo(-hw, -hh, -hw + r, -hh);
+      return s;
+    };
+    const winW = 0.044;
+    const winH = 0.036;
+    const outer = mkRect(winW, winH, 0.0075);
+    const inner = mkRect(winW - 0.0052, winH - 0.0052, 0.005);
+    outer.holes.push(inner);
+    const hoodGeo = new THREE.ExtrudeGeometry(outer, {
+      depth: 0.015,
+      bevelEnabled: true,
+      bevelThickness: 0.001,
+      bevelSize: 0.0008,
+      bevelSegments: 2,
+    });
+    hoodGeo.translate(0, 0, -0.0075);
+    const reticleY = riserH + 0.023;
+    const hood = new THREE.Mesh(hoodGeo, housingMat);
+    hood.position.set(0, reticleY, 0);
+    grp.add(hood);
+
+    // Crystal-clear subtle anti-reflective reflex glass
+    const lensMat = new THREE.MeshBasicMaterial({
+      color: 0x48e8ff,
+      transparent: true,
+      opacity: 0.045,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    const lens = new THREE.Mesh(new THREE.PlaneGeometry(winW - 0.0056, winH - 0.0056), lensMat);
+    lens.position.set(0, reticleY, 0);
+    grp.add(lens);
+
+    // Razor-crisp glowing micro holographic red dot + subtle open ring dead-center on aim axis
+    const dotMat = new THREE.MeshBasicMaterial({
+      color: 0xff2b38,
+      transparent: true,
+      opacity: 0.96,
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    const dot = new THREE.Mesh(new THREE.CircleGeometry(0.001, 14), dotMat);
+    dot.position.set(0, reticleY, -0.002);
+    dot.renderOrder = 20;
+    grp.add(dot);
+
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0xff404e,
+      transparent: true,
+      opacity: 0.36,
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.0056, 0.0063, 24), ringMat);
+    ring.position.set(0, reticleY, -0.002);
+    ring.renderOrder = 20;
+    grp.add(ring);
+
+    return grp;
+  }
+
+  /**
    * Loads ALL 4 real downloaded 3D weapons (/models/guns/akm.glb, scarh.glb, aug.glb, pistol9mm.glb)
    * with Draco decompression and mounts them cleanly inside the rigged FPS hands!
    */
@@ -990,6 +1106,14 @@ export class WeaponSystem {
           root.traverse((obj) => {
             const mesh = obj as THREE.Mesh;
             if (!mesh.isMesh) return;
+            // Hide AUG A4's solid un-drilled rear/front iron-sight monolith in 1P (GLTFLoader converts spaces -> underscores!)
+            if (
+              sp.id === 'aug' &&
+              (/iron.?sights/i.test(mesh.name) || /iron.?sights/i.test(mesh.parent?.name || ''))
+            ) {
+              mesh.visible = false;
+              return;
+            }
             mesh.frustumCulled = false;
             mesh.castShadow = false;
             mesh.receiveShadow = false;
@@ -1012,6 +1136,18 @@ export class WeaponSystem {
               this.weaponMagPart[sp.id] = { obj: mesh, restY: mesh.position.y };
             }
           });
+
+          // Mount a sleek open-window Tactical Reflex Red-Dot Sight onto AUG A4 & SCAR-H top Picatinny rails
+          // so ADS gives a crystal-clear, 100% unobstructed sight picture dead-center on the crosshair!
+          if (sp.id === 'aug') {
+            const optic = this.buildTacticalReflexOptic(0.011);
+            optic.position.set(0.020, 0.0654, -0.04);
+            root.add(optic);
+          } else if (sp.id === 'scarl') {
+            const optic = this.buildTacticalReflexOptic(0.028);
+            optic.position.set(0.0071, 0.0498, 0.02);
+            root.add(optic);
+          }
 
           const container = this.weaponGlbGroups[sp.id];
           container.clear();

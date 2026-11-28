@@ -1203,7 +1203,12 @@ class SkyfallGame {
       this.hideTdmError();
       const clean = sanitizePlayerName(nameInput.value);
       if (clean) localStorage.setItem('skyfall_tdm_name', clean);
-      this.mp.hostLobby(nameInput.value, this.tdmHostSelectedMap, this.settings.character);
+      const ok = this.mp.hostLobby(nameInput.value, this.tdmHostSelectedMap, this.settings.character);
+      if (!ok) {
+        const shell = this.tdmOverlay.querySelector('.tdm-shell');
+        if (shell) shell.scrollTop = 0;
+        nameInput.focus();
+      }
     });
 
     document.getElementById('btn-tdm-join')!.addEventListener('click', () => {
@@ -1957,7 +1962,7 @@ class SkyfallGame {
       this.handleHostShotReceived({
         shooterId: BOT_EMBER_ID,
         weaponId: 'scarl',
-        weaponName: 'SCAR-L',
+        weaponName: 'SCAR-H',
         muzzle: { x: muzzle.x, y: muzzle.y, z: muzzle.z },
         endPoint: { x: finalEnd.x, y: finalEnd.y, z: finalEnd.z },
         hitWall: blockedByWall || !hitRoll,
@@ -1966,7 +1971,7 @@ class SkyfallGame {
         hitZone: hitRoll ? (isHead ? 'head' : 'body') : undefined,
         hitPoint: hitRoll ? { x: targetCenter.x, y: targetCenter.y, z: targetCenter.z } : undefined,
         shotDir: { x: shotDir.x, y: shotDir.y, z: shotDir.z },
-        damage: hitRoll ? (isHead ? 48 : 22) : 0,
+        damage: hitRoll ? (isHead ? 40 : 20) : 0,
       });
     }
 

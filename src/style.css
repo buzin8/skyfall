@@ -668,7 +668,7 @@ body {
 
 /* Weapon & Ammo */
 .ammo-panel {
-  min-width: 204px;
+  min-width: 286px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -736,15 +736,17 @@ body {
 
 .weapon-slots {
   display: flex;
-  gap: 4px;
+  gap: 5px;
+  flex-wrap: nowrap;
 }
 
 .w-slot {
-  flex: 1;
-  font-size: 9px;
+  flex: 1 0 auto;
+  white-space: nowrap;
+  font-size: 9.5px;
   font-weight: 600;
-  letter-spacing: 0.8px;
-  padding: 2px 4px;
+  letter-spacing: 0.5px;
+  padding: 3px 7px;
   text-align: center;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.07);

@@ -41,8 +41,33 @@ export class DowntownLevelBuilder {
   private minimapRects: MinimapRect[] = [];
   private pulseLights: Array<{ light: THREE.PointLight; base: number; phase: number }> = [];
   private emergencyLights: Array<{ mat: THREE.MeshBasicMaterial; phase: number; colorA: number; colorB: number }> = [];
+  private carShadowMat: THREE.MeshBasicMaterial | null = null;
 
   private isLowEnd = false;
+
+  private getCarContactShadowMat(): THREE.MeshBasicMaterial {
+    if (this.carShadowMat) return this.carShadowMat;
+    const c = document.createElement('canvas');
+    c.width = 256;
+    c.height = 256;
+    const ctx = c.getContext('2d')!;
+    const grad = ctx.createRadialGradient(128, 128, 22, 128, 128, 122);
+    grad.addColorStop(0.0, 'rgba(3, 5, 10, 0.92)');
+    grad.addColorStop(0.58, 'rgba(4, 6, 12, 0.78)');
+    grad.addColorStop(0.84, 'rgba(6, 9, 18, 0.34)');
+    grad.addColorStop(1.0, 'rgba(6, 9, 18, 0.0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 256, 256);
+    const tex = new THREE.CanvasTexture(c);
+    this.carShadowMat = new THREE.MeshBasicMaterial({
+      map: tex,
+      transparent: true,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+    });
+    return this.carShadowMat;
+  }
 
   constructor(isLowEnd = false) {
     this.isLowEnd = isLowEnd;
@@ -289,11 +314,11 @@ export class DowntownLevelBuilder {
     this.group.add(this.highTierGlbRoot);
 
     // 8. Spawn abundant Roaming Walking NPCs + Standing-Pose Crowd NPCs across all of Cyberpunk City!
-    // Full mode: 42 active roamers + 26 standing crowd (68 total lively NPCs); Low-End: 8 + 5
+    // Full mode: 42 active roamers + 26 standing crowd (68 total lively NPCs); Low-End: 16 walkers + 12 crowd (all 14 NPC types visible!)
     const npcNodes = this.buildPedestrianGraph();
     const allCrowdSpots = this.buildCrowdSpots();
-    const walkerCount = this.isLowEnd ? 8 : 42;
-    const crowdSpots = this.isLowEnd ? allCrowdSpots.slice(0, 5) : allCrowdSpots;
+    const walkerCount = this.isLowEnd ? 16 : 42;
+    const crowdSpots = this.isLowEnd ? allCrowdSpots.slice(0, 12) : allCrowdSpots;
     const npcSystem = new DowntownNpcSystem(npcNodes, walkerCount, this.colliders, crowdSpots, this.isLowEnd);
     this.group.add(npcSystem.group);
 
@@ -532,7 +557,9 @@ export class DowntownLevelBuilder {
     void loadDowntownGlb(`cars/${carId}.glb`, 0).then((tpl) => {
       if (!tpl) return;
       const car = fitGlbInstance(tpl, { uniformLength: lengthMeters, rotY });
-      car.position.set(x, 0, z);
+      car.userData.carId = carId;
+      // Seat tires millimeter-flush on road asphalt (zero hover gap even on low-end simplified roads!)
+      car.position.set(x, -0.012, z);
       styleGlbCarForCyberpunkDowntown(car);
       if (this.isLowEnd) {
         car.traverse((o) => {
@@ -544,20 +571,29 @@ export class DowntownLevelBuilder {
         });
       }
 
-      // Subtle glowing neon underglow / headlight accent matching the Cyberpunk Boulevard!
+      // Grounded dark AO tire-contact shadow (keeps every car visibly planted even with shadowMap OFF in Low-End mode!)
+      const contactShadow = new THREE.Mesh(
+        new THREE.PlaneGeometry(2.55, lengthMeters * 1.12),
+        this.getCarContactShadowMat()
+      );
+      contactShadow.rotation.x = -Math.PI / 2;
+      contactShadow.position.y = 0.022;
+      car.add(contactShadow);
+
+      // Subtle outer neon underglow rim around the dark tire shadow (never blows out the shadow underneath the car!)
       const underCol = opts?.isPatrol ? 0x1e88ff : carId.includes('lambo') ? 0xff2ec4 : 0x2ce8ff;
       const underGlow = new THREE.Mesh(
-        new THREE.PlaneGeometry(2.1, lengthMeters * 0.9),
+        new THREE.PlaneGeometry(2.45, lengthMeters * 1.02),
         new THREE.MeshBasicMaterial({
           color: underCol,
           transparent: true,
-          opacity: 0.24,
+          opacity: this.isLowEnd ? 0.08 : 0.14,
           depthWrite: false,
           blending: THREE.AdditiveBlending,
         })
       );
       underGlow.rotation.x = -Math.PI / 2;
-      underGlow.position.y = 0.04;
+      underGlow.position.y = 0.016;
       car.add(underGlow);
 
       // Live flashing Red/Blue Police Lightbar beacon mounted flush inside Dodge SRT Viper Patrol's real roof lightbar!

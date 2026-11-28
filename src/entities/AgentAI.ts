@@ -108,7 +108,7 @@ export class TacticalAgent {
   public respawn(spawnPos: THREE.Vector3, spawnYaw: number, holdOpening = 0): void {
     this.pos.copy(spawnPos);
     this.yaw = spawnYaw;
-    this.hp = this.style === 'sentinel' ? 120 : 100;
+    this.hp = 100;
     this.maxHp = this.hp;
     this.alive = true;
     this.spottedTimer = 0;

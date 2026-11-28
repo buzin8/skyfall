@@ -140,18 +140,31 @@ function applyBoneYawRoll(ab: AxisBoundBone | undefined, yawRad: number, rollRad
 }
 
 /**
- * Gently slopes T-pose / A-pose clavicles (Shoulders) downward by ~10 deg so shoulders relax
- * naturally like a real human (eliminating raised "scarecrow" shoulders completely!).
+ * Gently slopes T-pose / A-pose clavicles (Shoulders) downward so shoulder blades relax
+ * naturally like a real human (gentler slope on A-pose models whose arms already hang down -> ZERO pinching!).
  */
 function bakeRelaxedShoulderSlope(
   shoulder: THREE.Object3D | null,
+  upperArm: THREE.Object3D | null,
+  lowerArm: THREE.Object3D | null,
   charRootInvQ: THREE.Quaternion,
   side: 1 | -1
 ): void {
   if (!shoulder || !shoulder.parent) return;
   shoulder.updateMatrixWorld(true);
+  let slopeRad = 0.165;
+  if (upperArm && lowerArm) {
+    upperArm.getWorldPosition(_vA);
+    lowerArm.getWorldPosition(_vB);
+    _vDir.subVectors(_vB, _vA);
+    if (_vDir.lengthSq() > 1e-8) {
+      _vDir.normalize().applyQuaternion(charRootInvQ);
+      // A-pose walkers (Sakura, Jeny, Jack) already slope downward (-0.4..-0.65); slope gentler so scapula stays smooth!
+      if (_vDir.y < -0.35) slopeRad = 0.085;
+    }
+  }
   // Rotate around character's +Z forward axis: -angle drops Left (+X) down; +angle drops Right (-X) down!
-  _qDelta.setFromAxisAngle(_axisZ, -side * 0.17);
+  _qDelta.setFromAxisAngle(_axisZ, -side * slopeRad);
   shoulder.parent.getWorldQuaternion(_qParentInv);
   _qParentInv.premultiply(charRootInvQ);
   _qTmp.copy(_qParentInv).invert().multiply(_qDelta).multiply(_qParentInv);
@@ -269,8 +282,8 @@ function buildDownloadedGlbCivilian(
   modelGroup.getWorldQuaternion(charRootInvQ).invert();
 
   // First slope clavicles gracefully downward (kills scarecrow shoulders!), then drop upper arms naturally!
-  bakeRelaxedShoulderSlope(shL, charRootInvQ, 1);
-  bakeRelaxedShoulderSlope(shR, charRootInvQ, -1);
+  bakeRelaxedShoulderSlope(shL, uArmL, lArmL, charRootInvQ, 1);
+  bakeRelaxedShoulderSlope(shR, uArmR, lArmR, charRootInvQ, -1);
   bakeRelaxedArmDrop(uArmL, lArmL, charRootInvQ, 1);
   bakeRelaxedArmDrop(uArmR, lArmR, charRootInvQ, -1);
 
@@ -317,6 +330,36 @@ export class DowntownNpcSystem {
   };
 
   private isLowEnd: boolean;
+  private npcShadowMat: THREE.MeshBasicMaterial | null = null;
+
+  private getNpcShadowMat(): THREE.MeshBasicMaterial {
+    if (this.npcShadowMat) return this.npcShadowMat;
+    const c = document.createElement('canvas');
+    c.width = 128;
+    c.height = 128;
+    const ctx = c.getContext('2d')!;
+    const g = ctx.createRadialGradient(64, 64, 8, 64, 64, 60);
+    g.addColorStop(0.0, 'rgba(4, 6, 12, 0.68)');
+    g.addColorStop(0.65, 'rgba(4, 6, 12, 0.34)');
+    g.addColorStop(1.0, 'rgba(4, 6, 12, 0.0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 128, 128);
+    this.npcShadowMat = new THREE.MeshBasicMaterial({
+      map: new THREE.CanvasTexture(c),
+      transparent: true,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+    });
+    return this.npcShadowMat;
+  }
+
+  private addFootShadow(root: THREE.Group): void {
+    const disc = new THREE.Mesh(new THREE.PlaneGeometry(0.84, 0.84), this.getNpcShadowMat());
+    disc.rotation.x = -Math.PI / 2;
+    disc.position.y = 0.014;
+    root.add(disc);
+  }
 
   constructor(
     nodes: PedestrianNode[],
@@ -366,7 +409,8 @@ export class DowntownNpcSystem {
       const root = new THREE.Group();
       root.position.copy(pos);
       root.rotation.y = startYaw;
-      if (i >= 8) {
+      this.addFootShadow(root);
+      if (i >= 16) {
         root.userData.lowEndOptional = true;
       }
       this.group.add(root);
@@ -419,7 +463,8 @@ export class DowntownNpcSystem {
       const root = new THREE.Group();
       root.position.copy(pos);
       root.rotation.y = sp.yaw;
-      if (i >= 5) {
+      this.addFootShadow(root);
+      if (i >= 12) {
         root.userData.lowEndOptional = true;
       }
       this.group.add(root);
@@ -669,13 +714,13 @@ export class DowntownNpcSystem {
       applyBonePitch(rig.lowerArmL, elbowL);
       applyBonePitch(rig.lowerArmR, elbowR);
 
-      // Soft trailing wrist follow-through & subtle natural shoulder breathing/counter-roll
+      // Soft trailing wrist follow-through & natural shoulder-blade (scapula) horizontal glide + subtle stride roll!
       const wristLagL = Math.sin(p + Math.PI - 0.95);
       const wristLagR = Math.sin(p - 0.95);
       applyBonePitch(rig.handL, -wristLagL * 0.15 * w);
       applyBonePitch(rig.handR, -wristLagR * 0.15 * w);
-      applyBonePitch(rig.shoulderL, -sR * 0.045 * w);
-      applyBonePitch(rig.shoulderR, -sL * 0.045 * w);
+      applyBoneYawRoll(rig.shoulderL, -sR * 0.065 * w, -sR * 0.025 * w);
+      applyBoneYawRoll(rig.shoulderR, sL * 0.065 * w, sL * 0.025 * w);
 
       rig.modelGroup.position.y = Math.abs(Math.cos(p)) * 0.022 * w;
       // Natural human counter-rotation: right shoulder swings slightly forward as left leg strides forward (+sL)!

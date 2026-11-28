@@ -28,6 +28,8 @@ export const DOWNTOWN_WALKER_NPCS = [
   'outis',
   'cammy',
   'sakura',
+  'jeny',
+  'jack_silent',
 ] as const;
 
 /** Stylish standing-pose NPCs that hang out naturally beside supercars & storefronts! */
@@ -37,6 +39,7 @@ export const DOWNTOWN_CROWD_NPCS = [
   'office_elegance',
   'unboxing_allure',
   'gangsta_girl',
+  'woman_v17',
 ] as const;
 
 export const DOWNTOWN_NPC_GLBS = [...DOWNTOWN_WALKER_NPCS, ...DOWNTOWN_CROWD_NPCS] as const;
@@ -79,6 +82,29 @@ function runQueuedGlbLoad<T>(priority: boolean, fn: () => Promise<T>): Promise<T
   });
 }
 
+/**
+ * Computes the EXACT world-space bounding box from actual mesh vertices (never the inflated 8-corner AABB
+ * approximation of rotated child sub-meshes, which previously lifted tilted/rotated cars like Aventador & Revuelto
+ * 65cm off the road!).
+ */
+function computeExactVertexBox(root: THREE.Object3D): THREE.Box3 {
+  root.updateMatrixWorld(true);
+  const box = new THREE.Box3();
+  const v = new THREE.Vector3();
+  root.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.geometry) return;
+    const pos = mesh.geometry.getAttribute('position');
+    if (!pos) return;
+    const mw = mesh.matrixWorld;
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(mw);
+      box.expandByPoint(v);
+    }
+  });
+  return box.isEmpty() ? new THREE.Box3().setFromObject(root) : box;
+}
+
 export function loadDowntownGlb(relPath: string, creaseAngle = 0): Promise<LoadedGlbTemplate | null> {
   const existing = templateCache.get(relPath);
   if (existing) return Promise.resolve(existing);
@@ -107,7 +133,9 @@ export function loadDowntownGlb(relPath: string, creaseAngle = 0): Promise<Loade
                   mesh.frustumCulled = true;
                 }
               });
-              const rawBox = new THREE.Box3().setFromObject(gltf.scene);
+              const rawBox = isCityPriority
+                ? new THREE.Box3().setFromObject(gltf.scene)
+                : computeExactVertexBox(gltf.scene);
               const rawSize = new THREE.Vector3();
               rawBox.getSize(rawSize);
               const tpl: LoadedGlbTemplate = {
@@ -193,7 +221,7 @@ export function fitGlbInstance(
   if (autoRotY) clone.rotation.y += autoRotY;
   clone.updateMatrixWorld(true);
 
-  const box = new THREE.Box3().setFromObject(clone);
+  const box = computeExactVertexBox(clone);
   const center = new THREE.Vector3();
   box.getCenter(center);
 
